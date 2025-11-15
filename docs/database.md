@@ -67,6 +67,7 @@ Artículos de noticias completos con metadata.
 | location | VARCHAR(255) | | Ciudad de origen |
 | category | VARCHAR(255) | | Categoría/Subcategoría |
 | content | TEXT | NOT NULL | Contenido en formato Markdown |
+| processed_at | DATETIME | NULLABLE, INDEX | Fecha de procesamiento (NULL = no procesado) |
 | created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Fecha de creación en DB |
 | updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
 

@@ -100,6 +100,7 @@ class Article(Base):
     category = Column(String(255))
     html_path = Column(String(500))
 
+    processed_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
 
