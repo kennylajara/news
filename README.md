@@ -18,39 +18,43 @@ Este proyecto descarga noticias de diversos medios digitales, extrae su contenid
 
 ```
 news/
-├── data/
-│   └── articles/           # Artículos descargados organizados por dominio
-│       └── {domain}/
-│           ├── {hash}.html # HTML limpio del artículo
-│           └── {hash}.json # Datos extraídos en JSON
+├── db/
+│   ├── __init__.py
+│   ├── models.py          # Modelos SQLAlchemy (Source, Article, Tag)
+│   └── database.py        # Clase Database con operaciones CRUD
 ├── extractors/
 │   ├── __init__.py
 │   ├── base.py            # Clase base para extractores
 │   ├── html_to_markdown.py # Utilidades de conversión HTML→Markdown
 │   └── {domain}_com.py    # Extractor específico por dominio
 ├── get_news.py            # Script principal para descargar noticias
-└── requirements.txt
+├── pyproject.toml         # Configuración del proyecto y dependencias
+└── uv.lock                # Lock file de dependencias
 ```
 
 ## Instalación
 
-1. Clonar el repositorio:
+### Prerrequisitos
+
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/) (administrador de paquetes rápido)
+
+### Pasos
+
+1. Instalar uv (si no lo tienes):
 ```bash
-git clone <repository-url>
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+2. Clonar el repositorio:
+```bash
+git clone https://github.com/kennylajara/news.git
 cd news
 ```
 
-2. Crear y activar entorno virtual:
+3. Sincronizar dependencias (uv crea automáticamente el entorno virtual):
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate  # En Linux/Mac
-# o
-.venv\Scripts\activate     # En Windows
-```
-
-3. Instalar dependencias:
-```bash
-pip install -r requirements.txt
+uv sync
 ```
 
 ## Uso
@@ -58,12 +62,12 @@ pip install -r requirements.txt
 ### Descargar una noticia
 
 ```bash
-python get_news.py <URL>
+uv run python get_news.py <URL>
 ```
 
 **Ejemplo:**
 ```bash
-python get_news.py "https://www.diariolibre.com/mundo/espana/2025/11/15/dominicanos-en-espana-pasan-de-controlar-narcopisos-a-mercenarios/3313400"
+uv run python get_news.py "https://www.diariolibre.com/mundo/espana/2025/11/15/dominicanos-en-espana-pasan-de-controlar-narcopisos-a-mercenarios/3313400"
 ```
 
 **Salida:**
@@ -90,25 +94,31 @@ Datos extraídos:
 ✓ Proceso completado exitosamente!
 ```
 
-## Formato del JSON
+## Formato de Datos
 
-Cada artículo extraído tiene la siguiente estructura:
+Los artículos se almacenan en una base de datos SQLite (`data/news.db`) con la siguiente estructura:
 
-```json
+### Tablas principales:
+
+- **sources**: Fuentes de noticias (dominio, nombre)
+- **articles**: Artículos completos con metadata
+- **tags**: Tags únicos
+- **article_tags**: Relación muchos-a-muchos entre artículos y tags
+
+### Esquema de Article:
+
+```python
 {
+  "hash": "sha256_completo",  # SHA-256 completo de la URL
+  "url": "URL original",
   "title": "Título del artículo",
   "subtitle": "Subtítulo o bajada",
   "author": "Nombre del autor",
-  "date": "2025-11-15T00:01:00-04:00",
+  "published_date": "2025-11-15 00:01:00",
   "location": "Ciudad de origen",
   "content": "Contenido en Markdown con **negritas** y [enlaces](url)",
-  "tags": ["tag1", "tag2", "tag3"],
   "category": "Categoría/Subcategoría",
-  "_metadata": {
-    "url": "URL original",
-    "domain": "dominio.com",
-    "hash": "8188211e"
-  }
+  "tags": ["tag1", "tag2", "tag3"]  # Relación M:N
 }
 ```
 
@@ -184,6 +194,7 @@ def extract(html_content, url):
 - **requests**: Descarga de HTML
 - **beautifulsoup4**: Parsing y manipulación de HTML
 - **lxml**: Parser rápido para BeautifulSoup
+- **sqlalchemy**: ORM para base de datos SQLite
 
 ## Dominios Soportados
 
