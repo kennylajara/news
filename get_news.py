@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from pathlib import Path
 from bs4 import BeautifulSoup, Comment
 import importlib
+from db import Database
 
 
 def get_domain(url):
@@ -26,9 +27,9 @@ def get_domain(url):
 
 
 def get_url_hash(url):
-    """Genera los primeros 8 dígitos del hash SHA256 de una URL"""
+    """Genera el hash SHA256 completo de una URL"""
     hash_object = hashlib.sha256(url.encode())
-    return hash_object.hexdigest()[:8]
+    return hash_object.hexdigest()
 
 
 def clean_html(html_content):
@@ -149,37 +150,25 @@ def main():
     print(f"Dominio: {domain}")
     print(f"Hash: {url_hash}")
 
-    # Crear directorio para el dominio
-    domain_dir = Path(f"./data/articles/{domain}")
-    domain_dir.mkdir(parents=True, exist_ok=True)
+    # Verificar si el artículo ya existe en la base de datos
+    db = Database()
+    session = db.get_session()
+    try:
+        if db.article_exists(session, url=url, hash=url_hash):
+            print(f"✓ El artículo ya existe en la base de datos")
+            print("No se procesará nuevamente.")
+            session.close()
+            sys.exit(0)
+    finally:
+        session.close()
 
-    # Definir rutas de archivos
-    html_path = domain_dir / f"{url_hash}.html"
-    json_path = domain_dir / f"{url_hash}.json"
+    # Descargar HTML
+    print("Descargando HTML...")
+    html_content = download_html(url)
 
-    # Verificar si el JSON ya existe
-    if json_path.exists():
-        print(f"✓ El archivo JSON ya existe: {json_path}")
-        print("No se procesará nuevamente.")
-        sys.exit(0)
-
-    # Verificar si el HTML ya existe
-    if html_path.exists():
-        print(f"✓ HTML ya descargado: {html_path}")
-        print("Usando HTML existente para extracción...")
-    else:
-        # Descargar HTML
-        print("Descargando HTML...")
-        html_content = download_html(url)
-
-        # Limpiar HTML
-        print("Limpiando HTML...")
-        cleaned_html = clean_html(html_content)
-
-        # Guardar HTML limpio
-        with open(html_path, 'w', encoding='utf-8') as f:
-            f.write(cleaned_html)
-        print(f"HTML limpio guardado en: {html_path}")
+    # Limpiar HTML
+    print("Limpiando HTML...")
+    cleaned_html = clean_html(html_content)
 
     # Intentar cargar extractor para el dominio
     print(f"\nBuscando extractor para {domain}...")
@@ -195,11 +184,7 @@ def main():
     # Usar el extractor para procesar el HTML
     print("Extrayendo datos del artículo...")
     try:
-        # Leer el HTML limpio que acabamos de guardar
-        with open(html_path, 'r', encoding='utf-8') as f:
-            html_for_extraction = f.read()
-
-        article_data = extractor.extract(html_for_extraction, url)
+        article_data = extractor.extract(cleaned_html, url)
 
         # Agregar metadata
         article_data["_metadata"] = {
@@ -208,11 +193,21 @@ def main():
             "hash": url_hash
         }
 
-        # Guardar JSON
-        with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(article_data, f, indent=2, ensure_ascii=False)
+        # Guardar en base de datos
+        print("Guardando en base de datos...")
+        db = Database()
+        session = db.get_session()
+        try:
+            article = db.save_article(session, article_data, domain)
+            session.commit()
+            print(f"✓ Artículo guardado en base de datos (ID: {article.id})")
+        except Exception as db_error:
+            session.rollback()
+            print(f"⚠ Error guardando en BD: {db_error}")
+            raise
+        finally:
+            session.close()
 
-        print(f"✓ JSON generado exitosamente: {json_path}")
         print("\nDatos extraídos:")
         print(f"  Título: {article_data.get('title', 'N/A')[:80]}...")
         print(f"  Autor: {article_data.get('author', 'N/A')}")
