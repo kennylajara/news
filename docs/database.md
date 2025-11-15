@@ -21,6 +21,31 @@ Fuentes de noticias (medios digitales).
 
 **Relaciones**:
 - 1:N con `articles` (un source tiene muchos artículos)
+- 1:N con `domain_processes` (un source tiene múltiples registros de procesamiento)
+
+### Tabla: `domain_processes`
+
+Rastrea la última vez que se ejecutó cada tipo de procesamiento por dominio.
+
+| Campo | Tipo | Restricciones | Descripción |
+|-------|------|---------------|-------------|
+| source_id | INTEGER | FOREIGN KEY, PRIMARY KEY | ID de la fuente |
+| process_type | ENUM | PRIMARY KEY | Tipo de procesamiento |
+| last_processed_at | DATETIME | NOT NULL | Última vez que se procesó |
+
+**Valores de `process_type`**:
+- `pre_process_articles`: Pre-procesamiento de artículos
+
+**Relaciones**:
+- N:1 con `sources` (múltiples procesos pertenecen a un source)
+
+**Restricciones**:
+- PK compuesta: `(source_id, process_type)` - un solo registro por tipo de proceso por dominio
+- `source_id` ON DELETE CASCADE (si se elimina el source, se eliminan sus procesos)
+
+**Inicialización automática**:
+- Cuando se crea un nuevo `Source`, automáticamente se crean registros en `domain_processes` para cada tipo de proceso
+- La fecha inicial es `1970-01-01` (época Unix), equivalente a "nunca procesado"
 
 ### Tabla: `articles`
 
@@ -30,17 +55,17 @@ Artículos de noticias completos con metadata.
 |-------|------|---------------|-------------|
 | id | INTEGER | PRIMARY KEY | ID auto-incremental |
 | hash | VARCHAR(64) | UNIQUE, NOT NULL, INDEX | SHA-256 completo de la URL |
-| url | VARCHAR(2048) | UNIQUE, NOT NULL, INDEX | URL original del artículo |
-| source_id | INTEGER | FOREIGN KEY, NOT NULL, INDEX | ID de la fuente |
+| url | VARCHAR(2048) | NOT NULL | URL original del artículo |
+| source_id | INTEGER | FOREIGN KEY, NOT NULL | ID de la fuente |
 | title | VARCHAR(500) | NOT NULL | Título del artículo |
-| subtitle | VARCHAR(500) | | Subtítulo o bajada |
+| subtitle | VARCHAR(1000) | | Subtítulo o bajada |
 | author | VARCHAR(255) | | Nombre del autor |
-| published_date | DATETIME | | Fecha de publicación original |
+| published_date | DATETIME | INDEX | Fecha de publicación original |
 | location | VARCHAR(255) | | Ciudad de origen |
 | category | VARCHAR(255) | | Categoría/Subcategoría |
 | content | TEXT | NOT NULL | Contenido en formato Markdown |
-| created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP | Fecha de creación en DB |
-| updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP | Última actualización |
+| created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Fecha de creación en DB |
+| updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
 
 **Relaciones**:
 - N:1 con `sources` (muchos artículos pertenecen a un source)
@@ -48,8 +73,15 @@ Artículos de noticias completos con metadata.
 
 **Índices**:
 - `hash` (UNIQUE): Para deduplicación rápida
-- `url` (UNIQUE): Para búsqueda directa
-- `source_id`: Para filtrar por fuente
+- `(source_id, hash)` compuesto: Para búsquedas por dominio + deduplicación
+- `published_date`: Para ordenar por fecha de publicación
+- `created_at`: Para ordenar por fecha de ingreso
+- `updated_at`: Para ordenar por última modificación
+
+**Nota sobre URL**:
+- No tiene restricción UNIQUE ni índice (la unicidad está garantizada por el hash)
+- URLs pueden ser muy largas, indexarlas sería ineficiente
+- El hash SHA-256 es único y se usa para deduplicación
 
 ### Tabla: `tags`
 

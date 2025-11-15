@@ -6,7 +6,7 @@ from pathlib import Path
 from datetime import datetime
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
-from .models import Base, Source, Article, Tag
+from .models import Base, Source, Article, Tag, DomainProcess, ProcessType
 
 
 class Database:
@@ -37,6 +37,7 @@ class Database:
     def get_or_create_source(self, session: Session, domain: str, name: str = None) -> Source:
         """
         Get existing source or create new one.
+        Automatically initializes domain_processes with epoch date (1970-01-01).
 
         Args:
             session: Database session
@@ -51,6 +52,16 @@ class Database:
             source = Source(domain=domain, name=name or domain)
             session.add(source)
             session.flush()  # Get the ID without committing
+
+            # Initialize process tracking with epoch date (equivalent to "never processed")
+            for process_type in ProcessType:
+                process = DomainProcess(
+                    source_id=source.id,
+                    process_type=process_type,
+                    last_processed_at=datetime(1970, 1, 1)  # Unix epoch
+                )
+                session.add(process)
+            session.flush()
         return source
 
     def get_or_create_tag(self, session: Session, tag_name: str) -> Tag:

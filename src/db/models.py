@@ -3,10 +3,16 @@ SQLAlchemy models for news portal.
 """
 
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Text, DateTime, Table, ForeignKey, Index
+from sqlalchemy import Column, Integer, String, Text, DateTime, Table, ForeignKey, Index, Enum
 from sqlalchemy.orm import relationship, declarative_base
+import enum
 
 Base = declarative_base()
+
+
+class ProcessType(enum.Enum):
+    """Types of domain processing."""
+    PRE_PROCESS_ARTICLES = "pre_process_articles"
 
 # Association table for many-to-many relationship between articles and tags
 article_tags = Table(
@@ -30,9 +36,25 @@ class Source(Base):
 
     # Relationships
     articles = relationship('Article', back_populates='source', cascade='all, delete-orphan')
+    processes = relationship('DomainProcess', back_populates='source', cascade='all, delete-orphan')
 
     def __repr__(self):
         return f"<Source(domain='{self.domain}', name='{self.name}')>"
+
+
+class DomainProcess(Base):
+    """Track last processing time for different process types per domain."""
+    __tablename__ = 'domain_processes'
+
+    source_id = Column(Integer, ForeignKey('sources.id', ondelete='CASCADE'), primary_key=True)
+    process_type = Column(Enum(ProcessType), primary_key=True)
+    last_processed_at = Column(DateTime, nullable=False)
+
+    # Relationships
+    source = relationship('Source', back_populates='processes')
+
+    def __repr__(self):
+        return f"<DomainProcess(source_id={self.source_id}, type={self.process_type.value}, last_processed_at={self.last_processed_at})>"
 
 
 class Article(Base):
@@ -41,8 +63,8 @@ class Article(Base):
 
     id = Column(Integer, primary_key=True)
     hash = Column(String(64), nullable=False, unique=True, index=True)
-    url = Column(String(2048), nullable=False, unique=True, index=True)
-    source_id = Column(Integer, ForeignKey('sources.id'), nullable=False, index=True)
+    url = Column(String(2048), nullable=False)  # No unique, no index - uniqueness guaranteed by hash
+    source_id = Column(Integer, ForeignKey('sources.id'), nullable=False)
 
     title = Column(String(500), nullable=False)
     subtitle = Column(String(1000))
@@ -53,12 +75,17 @@ class Article(Base):
     category = Column(String(255))
     html_path = Column(String(500))
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
 
     # Relationships
     source = relationship('Source', back_populates='articles')
     tags = relationship('Tag', secondary=article_tags, back_populates='articles')
+
+    # Indexes
+    __table_args__ = (
+        Index('idx_article_source_hash', 'source_id', 'hash'),
+    )
 
     def __repr__(self):
         return f"<Article(hash='{self.hash}', title='{self.title[:50]}...')>"
