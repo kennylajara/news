@@ -141,6 +141,94 @@ Entidades nombradas extraídas de artículos mediante NER (Named Entity Recognit
 - Esta tabla será utilizada para extraer y vincular entidades nombradas (personas, organizaciones, lugares, etc.) de los artículos
 - Los scores de relevancia y tendencia se calcularán basados en menciones y frecuencia
 
+### Tabla: `processing_batches`
+
+Trabajos de procesamiento por lotes para artículos.
+
+| Campo | Tipo | Restricciones | Descripción |
+|-------|------|---------------|-------------|
+| id | INTEGER | PRIMARY KEY | ID auto-incremental |
+| source_id | INTEGER | FOREIGN KEY, NOT NULL, INDEX | ID de la fuente a procesar |
+| process_type | ENUM | NOT NULL, INDEX | Tipo de procesamiento |
+| status | VARCHAR(20) | NOT NULL, DEFAULT 'pending', INDEX | Estado del batch |
+| total_items | INTEGER | NOT NULL, DEFAULT 0 | Total de artículos en el batch |
+| processed_items | INTEGER | NOT NULL, DEFAULT 0 | Artículos procesados (exitosos + fallidos) |
+| successful_items | INTEGER | NOT NULL, DEFAULT 0 | Artículos procesados exitosamente |
+| failed_items | INTEGER | NOT NULL, DEFAULT 0 | Artículos que fallaron |
+| error_message | TEXT | NULLABLE | Mensaje de error general si el batch falló |
+| stats | JSON | NULLABLE | Estadísticas adicionales del batch (JSON) |
+| started_at | DATETIME | NULLABLE, INDEX | Fecha de inicio del procesamiento |
+| completed_at | DATETIME | NULLABLE, INDEX | Fecha de finalización |
+| created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Fecha de creación |
+| updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
+
+**Valores de `status`**:
+- `pending`: Batch creado, esperando procesamiento
+- `processing`: Batch en proceso
+- `completed`: Batch completado exitosamente
+- `failed`: Batch falló completamente
+
+**Campo `stats` (JSON)**: Puede contener métricas como tiempo promedio de procesamiento, tipos de errores encontrados, etc.
+
+**Relaciones**:
+- N:1 con `sources` (múltiples batches pueden procesar la misma fuente)
+- 1:N con `batch_items` (un batch contiene múltiples items)
+
+**Índices**:
+- `source_id`: Para filtrar batches por fuente
+- `process_type`: Para filtrar por tipo de procesamiento
+- `status`: Para buscar batches pendientes/en proceso
+- `started_at`, `completed_at`: Para ordenar por tiempo de ejecución
+- `created_at`, `updated_at`: Timestamps estándar
+
+### Tabla: `batch_items`
+
+Items individuales dentro de un batch de procesamiento.
+
+| Campo | Tipo | Restricciones | Descripción |
+|-------|------|---------------|-------------|
+| id | INTEGER | PRIMARY KEY | ID auto-incremental |
+| batch_id | INTEGER | FOREIGN KEY, NOT NULL, INDEX | ID del batch padre |
+| article_id | INTEGER | FOREIGN KEY, NOT NULL, INDEX | ID del artículo a procesar |
+| status | VARCHAR(20) | NOT NULL, DEFAULT 'pending', INDEX | Estado del item |
+| error_message | TEXT | NULLABLE | Mensaje de error específico del item |
+| logs | TEXT | NULLABLE | Logs de procesamiento del item |
+| stats | JSON | NULLABLE | Estadísticas específicas del item (JSON) |
+| started_at | DATETIME | NULLABLE | Fecha de inicio del procesamiento |
+| completed_at | DATETIME | NULLABLE | Fecha de finalización |
+| created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Fecha de creación |
+| updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
+
+**Valores de `status`**:
+- `pending`: Item pendiente de procesamiento
+- `processing`: Item en proceso
+- `completed`: Item procesado exitosamente
+- `failed`: Item falló durante el procesamiento
+- `skipped`: Item saltado (ej: ya procesado anteriormente)
+
+**Campo `logs` (TEXT)**: Logs detallados del procesamiento del item
+
+**Campo `stats` (JSON)**: Puede contener métricas como:
+- Tiempo de procesamiento
+- Número de entidades extraídas
+- Tokens procesados
+- Cualquier otra métrica específica del tipo de procesamiento
+
+**Relaciones**:
+- N:1 con `processing_batches` (múltiples items pertenecen a un batch)
+- N:1 con `articles` (múltiples items pueden referenciar el mismo artículo en diferentes batches)
+
+**Índices**:
+- `batch_id`: Para buscar todos los items de un batch
+- `article_id`: Para buscar procesamiento histórico de un artículo
+- `status`: Para filtrar items pendientes/fallidos
+- `(batch_id, status)` compuesto: Para consultas de estado por batch
+- `created_at`, `updated_at`: Timestamps estándar
+
+**Restricciones**:
+- `batch_id` ON DELETE CASCADE (si se elimina el batch, se eliminan sus items)
+- `article_id` ON DELETE CASCADE (si se elimina el artículo, se eliminan sus registros de procesamiento)
+
 ### Tabla: `article_tags`
 
 Tabla de asociación para la relación muchos-a-muchos entre artículos y tags.
