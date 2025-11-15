@@ -9,8 +9,22 @@ dependencies = [
     "beautifulsoup4>=4.14.2",
     "lxml>=6.0.2",
     "sqlalchemy>=2.0.44",
+    "click==8.3.0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/kennylajara/news"
 Repository = "https://github.com/kennylajara/news"
+
+[project.scripts]
+news = "cli:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["cli.py", "commands", "db", "extractors", "get_news.py"]

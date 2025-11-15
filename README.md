@@ -18,6 +18,10 @@ Este proyecto descarga noticias de diversos medios digitales, extrae su contenid
 
 ```
 news/
+├── commands/
+│   ├── __init__.py
+│   ├── article.py         # Comandos de gestión de artículos
+│   └── domain.py          # Comandos de gestión de fuentes
 ├── db/
 │   ├── __init__.py
 │   ├── models.py          # Modelos SQLAlchemy (Source, Article, Tag)
@@ -27,7 +31,8 @@ news/
 │   ├── base.py            # Clase base para extractores
 │   ├── html_to_markdown.py # Utilidades de conversión HTML→Markdown
 │   └── {domain}_com.py    # Extractor específico por dominio
-├── get_news.py            # Script principal para descargar noticias
+├── cli.py                 # CLI principal (Click)
+├── get_news.py            # Funciones de descarga y extracción
 ├── pyproject.toml         # Configuración del proyecto y dependencias
 └── uv.lock                # Lock file de dependencias
 ```
@@ -59,39 +64,58 @@ uv sync
 
 ## Uso
 
-### Descargar una noticia
+El proyecto incluye una CLI completa construida con Click.
+
+### Comandos principales
 
 ```bash
-uv run python get_news.py <URL>
+uv run news --help              # Ver ayuda general
+uv run news article --help      # Ver comandos de artículos
+uv run news domain --help       # Ver comandos de dominios
 ```
 
-**Ejemplo:**
+### Gestión de Artículos
+
+**Descargar un artículo:**
 ```bash
-uv run python get_news.py "https://www.diariolibre.com/mundo/espana/2025/11/15/dominicanos-en-espana-pasan-de-controlar-narcopisos-a-mercenarios/3313400"
+uv run news article fetch "<URL>"
 ```
 
-**Salida:**
+**Listar artículos:**
+```bash
+uv run news article list                    # Últimos artículos
+uv run news article list --limit 20         # Con límite
+uv run news article list --source diariolibre.com  # Por fuente
+uv run news article list --tag "España"     # Por tag
 ```
-URL: https://www.diariolibre.com/mundo/espana/2025/11/15/dominicanos-en-espana-pasan-de-controlar-narcopisos-a-mercenarios/3313400
-Dominio: diariolibre.com
-Hash: 8188211e
-Descargando HTML...
-Limpiando HTML...
-HTML limpio guardado en: data/articles/diariolibre.com/8188211e.html
 
-Buscando extractor para diariolibre.com...
-✓ Extractor encontrado: extractors/diariolibre_com.py
-Extrayendo datos del artículo...
-✓ JSON generado exitosamente: data/articles/diariolibre.com/8188211e.json
+**Ver detalles:**
+```bash
+uv run news article show <ID>
+```
 
-Datos extraídos:
-  Título: Grupos de españoles de origen dominicano pasan de controlar narcopisos a "mercen...
-  Autor: Diario Libre
-  Fecha: 2025-11-15T00:01:00-04:00
-  Tags: 4 tags
-  Contenido: 4555 caracteres
+**Eliminar:**
+```bash
+uv run news article delete <ID>
+```
 
-✓ Proceso completado exitosamente!
+### Gestión de Fuentes
+
+**Listar fuentes:**
+```bash
+uv run news domain list
+uv run news domain show <dominio>
+uv run news domain stats
+```
+
+**Agregar fuente:**
+```bash
+uv run news domain add <dominio> --name "Nombre"
+```
+
+**Eliminar fuente:**
+```bash
+uv run news domain delete <dominio>
 ```
 
 ## Formato de Datos
@@ -195,6 +219,7 @@ def extract(html_content, url):
 - **beautifulsoup4**: Parsing y manipulación de HTML
 - **lxml**: Parser rápido para BeautifulSoup
 - **sqlalchemy**: ORM para base de datos SQLite
+- **click**: Framework para CLI (interfaz de línea de comandos)
 
 ## Dominios Soportados
 
