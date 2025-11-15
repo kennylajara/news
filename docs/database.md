@@ -17,7 +17,8 @@ Fuentes de noticias (medios digitales).
 | id | INTEGER | PRIMARY KEY | ID auto-incremental |
 | domain | VARCHAR(255) | UNIQUE, NOT NULL, INDEX | Dominio (ej: "diariolibre.com") |
 | name | VARCHAR(255) | | Nombre descriptivo del medio |
-| created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP | Fecha de creación |
+| created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Fecha de creación |
+| updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
 
 **Relaciones**:
 - 1:N con `articles` (un source tiene muchos artículos)
@@ -32,6 +33,8 @@ Rastrea la última vez que se ejecutó cada tipo de procesamiento por dominio.
 | source_id | INTEGER | FOREIGN KEY, PRIMARY KEY | ID de la fuente |
 | process_type | ENUM | PRIMARY KEY | Tipo de procesamiento |
 | last_processed_at | DATETIME | NOT NULL | Última vez que se procesó |
+| created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Fecha de creación |
+| updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
 
 **Valores de `process_type`**:
 - `pre_process_articles`: Pre-procesamiento de artículos
@@ -91,10 +94,51 @@ Tags únicos para categorización.
 |-------|------|---------------|-------------|
 | id | INTEGER | PRIMARY KEY | ID auto-incremental |
 | name | VARCHAR(100) | UNIQUE, NOT NULL, INDEX | Nombre del tag |
-| created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP | Fecha de creación |
+| created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Fecha de creación |
+| updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
 
 **Relaciones**:
 - M:N con `articles` vía `article_tags`
+
+### Tabla: `named_entities`
+
+Entidades nombradas extraídas de artículos mediante NER (Named Entity Recognition).
+
+| Campo | Tipo | Restricciones | Descripción |
+|-------|------|---------------|-------------|
+| id | INTEGER | PRIMARY KEY | ID auto-incremental |
+| name | VARCHAR(255) | UNIQUE, NOT NULL, INDEX | Nombre de la entidad |
+| entity_type | ENUM | NOT NULL | Tipo de entidad |
+| description | TEXT | NULLABLE | Descripción de la entidad |
+| photo_url | VARCHAR(500) | NULLABLE | URL de la foto de la entidad |
+| relevance | INTEGER | NOT NULL, DEFAULT 0 | Score de relevancia (0-100) |
+| trend | INTEGER | NOT NULL, DEFAULT 0 | Score de tendencia (-100 a 100) |
+| created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Fecha de creación |
+| updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
+
+**Valores de `entity_type`** (basados en etiquetas NER de spaCy):
+- `person`: Personas, incluyendo ficticias
+- `norp`: Nacionalidades, grupos religiosos o políticos
+- `fac`: Edificios, aeropuertos, autopistas, puentes, etc.
+- `org`: Compañías, agencias, instituciones, etc.
+- `gpe`: Países, ciudades, estados
+- `loc`: Ubicaciones no-GPE, cordilleras, cuerpos de agua
+- `product`: Objetos, vehículos, alimentos, etc. (no servicios)
+- `event`: Huracanes, batallas, guerras, eventos deportivos, etc.
+- `work_of_art`: Títulos de libros, canciones, etc.
+- `law`: Documentos nombrados convertidos en leyes
+- `language`: Cualquier idioma nombrado
+- `date`: Fechas absolutas o relativas o períodos
+- `time`: Tiempos menores a un día
+- `percent`: Porcentajes, incluyendo "%"
+- `money`: Valores monetarios, incluyendo unidad
+- `quantity`: Medidas, como peso o distancia
+- `ordinal`: "primero", "segundo", etc.
+- `cardinal`: Numerales que no caen en otro tipo
+
+**Uso futuro**:
+- Esta tabla será utilizada para extraer y vincular entidades nombradas (personas, organizaciones, lugares, etc.) de los artículos
+- Los scores de relevancia y tendencia se calcularán basados en menciones y frecuencia
 
 ### Tabla: `article_tags`
 

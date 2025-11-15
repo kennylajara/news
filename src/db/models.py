@@ -14,6 +14,28 @@ class ProcessType(enum.Enum):
     """Types of domain processing."""
     PRE_PROCESS_ARTICLES = "pre_process_articles"
 
+
+class EntityType(enum.Enum):
+    """Types of named entities (based on spaCy NER labels)."""
+    PERSON = "person"              # People, including fictional
+    NORP = "norp"                  # Nationalities or religious or political groups
+    FAC = "fac"                    # Buildings, airports, highways, bridges, etc.
+    ORG = "org"                    # Companies, agencies, institutions, etc.
+    GPE = "gpe"                    # Countries, cities, states
+    LOC = "loc"                    # Non-GPE locations, mountain ranges, bodies of water
+    PRODUCT = "product"            # Objects, vehicles, foods, etc. (Not services)
+    EVENT = "event"                # Named hurricanes, battles, wars, sports events, etc.
+    WORK_OF_ART = "work_of_art"    # Titles of books, songs, etc.
+    LAW = "law"                    # Named documents made into laws
+    LANGUAGE = "language"          # Any named language
+    DATE = "date"                  # Absolute or relative dates or periods
+    TIME = "time"                  # Times smaller than a day
+    PERCENT = "percent"            # Percentage, including "%"
+    MONEY = "money"                # Monetary values, including unit
+    QUANTITY = "quantity"          # Measurements, as of weight or distance
+    ORDINAL = "ordinal"            # "first", "second", etc.
+    CARDINAL = "cardinal"          # Numerals that do not fall under another type
+
 # Association table for many-to-many relationship between articles and tags
 article_tags = Table(
     'article_tags',
@@ -32,7 +54,8 @@ class Source(Base):
     id = Column(Integer, primary_key=True)
     domain = Column(String(255), nullable=False, unique=True, index=True)
     name = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
 
     # Relationships
     articles = relationship('Article', back_populates='source', cascade='all, delete-orphan')
@@ -49,6 +72,8 @@ class DomainProcess(Base):
     source_id = Column(Integer, ForeignKey('sources.id', ondelete='CASCADE'), primary_key=True)
     process_type = Column(Enum(ProcessType), primary_key=True)
     last_processed_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
 
     # Relationships
     source = relationship('Source', back_populates='processes')
@@ -97,10 +122,29 @@ class Tag(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String(100), nullable=False, unique=True, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
 
     # Relationships
     articles = relationship('Article', secondary=article_tags, back_populates='tags')
 
     def __repr__(self):
         return f"<Tag(name='{self.name}')>"
+
+
+class NamedEntity(Base):
+    """Named entity extracted from articles using NER."""
+    __tablename__ = 'named_entities'
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), nullable=False, unique=True, index=True)
+    entity_type = Column(Enum(EntityType), nullable=False)
+    description = Column(Text, nullable=True)
+    photo_url = Column(String(500), nullable=True)
+    relevance = Column(Integer, nullable=False, default=0)
+    trend = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
+
+    def __repr__(self):
+        return f"<NamedEntity(name='{self.name}', type={self.entity_type.value}, relevance={self.relevance})>"

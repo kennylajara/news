@@ -30,6 +30,7 @@ Este archivo proporciona reglas y buenas prácticas para Claude Code al trabajar
 - Usar métodos de `Database` class, no SQL crudo
 - Siempre cerrar sesiones con `session.close()` o usar context managers
 - Los comandos CLI ya manejan sesiones correctamente
+- **TODAS las tablas deben tener `created_at` y `updated_at` indexados** - son campos críticos para búsquedas y ordenamiento
 
 ### 5. Extractores
 
