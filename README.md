@@ -1,18 +1,19 @@
 # News Portal
 
-Portal de resúmenes de noticias que extrae, procesa y publica artículos de diferentes fuentes.
+Portal de resúmenes de noticias que extrae, procesa y almacena artículos de diferentes fuentes.
 
 ## Descripción
 
-Este proyecto descarga noticias de diversos medios digitales, extrae su contenido de forma estructurada y lo convierte a formato JSON para su posterior procesamiento y publicación.
+Este proyecto descarga noticias de diversos medios digitales, extrae su contenido de forma estructurada usando extractores especializados por dominio, y lo almacena en una base de datos SQLite.
 
 ## Características
 
 - **Extracción automática**: Descarga y limpia HTML de artículos de noticias
 - **Extractores por dominio**: Cada medio tiene su propio extractor especializado
 - **Conversión a Markdown**: El contenido se procesa preservando formato (negritas, enlaces, títulos)
-- **Formato estructurado**: Genera JSON con campos estándar (título, autor, fecha, ubicación, contenido, tags, categoría)
+- **Base de datos SQLite**: Almacenamiento estructurado con relaciones (fuentes, artículos, tags)
 - **Deduplicación**: No reprocesa artículos ya descargados
+- **CLI completo**: Interfaz de línea de comandos con Click
 
 ## Estructura del Proyecto
 
@@ -75,154 +76,57 @@ uv run news article --help      # Ver comandos de artículos
 uv run news domain --help       # Ver comandos de dominios
 ```
 
-### Gestión de Artículos
+#### Artículos
 
-**Descargar un artículo:**
 ```bash
+# Descargar artículo
 uv run news article fetch "<URL>"
-```
 
-**Listar artículos:**
-```bash
-uv run news article list                    # Últimos artículos
-uv run news article list --limit 20         # Con límite
+# Listar artículos
+uv run news article list                           # Últimos 10
+uv run news article list --limit 20                # Con límite
 uv run news article list --source diariolibre.com  # Por fuente
-uv run news article list --tag "España"     # Por tag
-```
+uv run news article list --tag "política"          # Por tag
 
-**Ver detalles:**
-```bash
-uv run news article show <ID>
-```
+# Ver artículo
+uv run news article show <ID>         # Vista previa
+uv run news article show <ID> --full  # Artículo completo
 
-**Eliminar:**
-```bash
+# Eliminar artículo
 uv run news article delete <ID>
 ```
 
-### Gestión de Fuentes
+### Fuentes
 
-**Listar fuentes:**
 ```bash
+# Listar fuentes
 uv run news domain list
 uv run news domain show <dominio>
 uv run news domain stats
-```
 
-**Agregar fuente:**
-```bash
+# Agregar fuente
 uv run news domain add <dominio> --name "Nombre"
-```
 
-**Eliminar fuente:**
-```bash
+# Eliminar fuente
 uv run news domain delete <dominio>
 ```
 
-## Formato de Datos
+## Tecnologías
 
-Los artículos se almacenan en una base de datos SQLite (`data/news.db`) con la siguiente estructura:
+- **Python 3.12+**
+- **uv**: Gestor de paquetes rápido
+- **Click 8.3.0**: Framework para CLI
+- **SQLAlchemy 2.0**: ORM para SQLite
+- **BeautifulSoup4 + lxml**: Parsing de HTML
+- **Requests**: Descarga HTTP
 
-### Tablas principales:
+## Documentación
 
-- **sources**: Fuentes de noticias (dominio, nombre)
-- **articles**: Artículos completos con metadata
-- **tags**: Tags únicos
-- **article_tags**: Relación muchos-a-muchos entre artículos y tags
+- **[Arquitectura](docs/architecture.md)** - Flujo de componentes, pipeline, patrones
+- **[Base de Datos](docs/database.md)** - Esquema, operaciones CRUD, deduplicación
+- **[Crear Extractores](docs/extractors.md)** - Guía completa con templates y ejemplos
 
-### Esquema de Article:
-
-```python
-{
-  "hash": "sha256_completo",  # SHA-256 completo de la URL
-  "url": "URL original",
-  "title": "Título del artículo",
-  "subtitle": "Subtítulo o bajada",
-  "author": "Nombre del autor",
-  "published_date": "2025-11-15 00:01:00",
-  "location": "Ciudad de origen",
-  "content": "Contenido en Markdown con **negritas** y [enlaces](url)",
-  "category": "Categoría/Subcategoría",
-  "tags": ["tag1", "tag2", "tag3"]  # Relación M:N
-}
-```
-
-## Crear un Nuevo Extractor
-
-Para agregar soporte a un nuevo medio:
-
-1. Crear archivo `extractors/{domain}_com.py` (reemplazar puntos por guiones bajos)
-
-2. Implementar función `extract(html_content, url)`:
-
-```python
-"""
-Extractor para ejemplo.com
-"""
-
-from bs4 import BeautifulSoup
-from . import html_to_markdown
-
-SELECTORS = {
-    'title': 'h1.article-title',
-    'subtitle': 'p.subtitle',
-    'author': 'span.author-name',
-    'date': 'time',
-    'location': 'span.location',
-    'content': 'div.article-body',
-    'tags': 'a.tag',
-    'breadcrumb': 'nav.breadcrumb li'
-}
-
-def extract(html_content, url):
-    """
-    Extrae datos de artículos de ejemplo.com
-
-    Args:
-        html_content: HTML limpio del artículo
-        url: URL original del artículo
-
-    Returns:
-        dict con datos del artículo
-    """
-    soup = BeautifulSoup(html_content, 'html.parser')
-
-    # Extraer campos básicos
-    title = html_to_markdown.extract_text_from_element(soup, SELECTORS['title'])
-    subtitle = html_to_markdown.extract_text_from_element(soup, SELECTORS['subtitle'])
-    author = html_to_markdown.extract_text_from_element(soup, SELECTORS['author'])
-    location = html_to_markdown.extract_text_from_element(soup, SELECTORS['location'])
-
-    # Extraer contenido
-    content_element = soup.select_one(SELECTORS['content'])
-    content = html_to_markdown.extract_article_content(content_element) if content_element else ""
-
-    # Extraer tags
-    tags = html_to_markdown.extract_list_from_elements(soup, SELECTORS['tags'])
-
-    return {
-        "title": title,
-        "subtitle": subtitle,
-        "author": author,
-        "date": "",  # Implementar parseo de fecha específico
-        "location": location,
-        "content": content,
-        "tags": tags,
-        "category": ""  # Implementar extracción de categoría
-    }
-```
-
-3. El extractor será detectado y usado automáticamente
-
-## Dependencias
-
-- **requests**: Descarga de HTML
-- **beautifulsoup4**: Parsing y manipulación de HTML
-- **lxml**: Parser rápido para BeautifulSoup
-- **sqlalchemy**: ORM para base de datos SQLite
-- **click**: Framework para CLI (interfaz de línea de comandos)
-
-## Dominios Soportados
+## Fuentes Soportadas
 
 - ✓ diariolibre.com
 
@@ -230,7 +134,7 @@ def extract(html_content, url):
 
 - [ ] Agregar más extractores (periódicos dominicanos e internacionales)
 - [ ] Sistema de resúmenes automáticos
-- [ ] API para consulta de artículos
+- [ ] API REST para consulta de artículos
 - [ ] Frontend para visualización
-- [ ] Base de datos para almacenamiento
 - [ ] Sistema de publicación automática
+- [ ] Descarga asíncrona con aiohttp
