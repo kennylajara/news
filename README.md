@@ -18,23 +18,24 @@ Este proyecto descarga noticias de diversos medios digitales, extrae su contenid
 
 ```
 news/
-├── commands/
-│   ├── __init__.py
-│   ├── article.py         # Comandos de gestión de artículos
-│   └── domain.py          # Comandos de gestión de fuentes
-├── db/
-│   ├── __init__.py
-│   ├── models.py          # Modelos SQLAlchemy (Source, Article, Tag)
-│   └── database.py        # Clase Database con operaciones CRUD
-├── extractors/
-│   ├── __init__.py
-│   ├── base.py            # Clase base para extractores
-│   ├── html_to_markdown.py # Utilidades de conversión HTML→Markdown
-│   └── {domain}_com.py    # Extractor específico por dominio
-├── cli.py                 # CLI principal (Click)
-├── get_news.py            # Funciones de descarga y extracción
-├── pyproject.toml         # Configuración del proyecto y dependencias
-└── uv.lock                # Lock file de dependencias
+├── src/
+│   ├── commands/
+│   │   ├── __init__.py
+│   │   ├── article.py         # Comandos de gestión de artículos
+│   │   └── domain.py          # Comandos de gestión de fuentes
+│   ├── db/
+│   │   ├── __init__.py
+│   │   ├── models.py          # Modelos SQLAlchemy (Source, Article, Tag)
+│   │   └── database.py        # Clase Database con operaciones CRUD
+│   ├── extractors/
+│   │   ├── __init__.py
+│   │   ├── base.py            # Clase base para extractores
+│   │   ├── html_to_markdown.py # Utilidades de conversión HTML→Markdown
+│   │   └── {domain}_{ext}.py    # Extractor específico por dominio
+│   ├── cli.py                 # CLI principal (Click)
+│   └── get_news.py            # Funciones de descarga y extracción
+├── pyproject.toml             # Configuración del proyecto y dependencias
+└── uv.lock                    # Lock file de dependencias
 ```
 
 ## Instalación

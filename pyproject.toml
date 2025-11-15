@@ -26,5 +26,8 @@ build-backend = "hatchling.build"
 [tool.uv]
 package = true
 
+[tool.hatch.build]
+packages = ["src"]
+
 [tool.hatch.build.targets.wheel]
-packages = ["cli.py", "commands", "db", "extractors", "get_news.py"]
+sources = ["src"]
