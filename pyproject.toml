@@ -1,0 +1,16 @@
+[project]
+name = "news"
+version = "0.1.0"
+description = "News portal - Extract, process and publish news summaries"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "requests>=2.32.5",
+    "beautifulsoup4>=4.14.2",
+    "lxml>=6.0.2",
+    "sqlalchemy>=2.0.44",
+]
+
+[project.urls]
+Homepage = "https://github.com/kennylajara/news"
+Repository = "https://github.com/kennylajara/news"
