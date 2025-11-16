@@ -315,3 +315,6 @@ http-client.private.env.json
 *.db-journal
 *.db-wal
 *.db-shm
+
+# Claude Code local settings
+.claude/settings.local.json
