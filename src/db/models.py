@@ -36,6 +36,13 @@ class EntityType(enum.Enum):
     ORDINAL = "ordinal"            # "first", "second", etc.
     CARDINAL = "cardinal"          # Numerals that do not fall under another type
 
+
+class ClusterCategory(enum.Enum):
+    """Categories for sentence clusters based on importance."""
+    CORE = "core"                  # Main topic of the article
+    SECONDARY = "secondary"        # Important related topics
+    FILLER = "filler"              # Filler or contextual information
+
 # Association table for many-to-many relationship between articles and tags
 article_tags = Table(
     'article_tags',
@@ -114,6 +121,7 @@ class Article(Base):
     html_path = Column(String(500))
 
     enriched_at = Column(DateTime, nullable=True, index=True)
+    cluster_enriched_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
 
@@ -121,6 +129,8 @@ class Article(Base):
     source = relationship('Source', back_populates='articles')
     tags = relationship('Tag', secondary=article_tags, back_populates='articles')
     entities = relationship('NamedEntity', secondary=article_entities, backref='articles')
+    clusters = relationship('ArticleCluster', back_populates='article', cascade='all, delete-orphan')
+    sentences = relationship('ArticleSentence', back_populates='article', cascade='all, delete-orphan')
 
     # Indexes
     __table_args__ = (
@@ -220,3 +230,59 @@ class BatchItem(Base):
 
     def __repr__(self):
         return f"<BatchItem(id={self.id}, batch_id={self.batch_id}, article_id={self.article_id}, status={self.status})>"
+
+
+class ArticleCluster(Base):
+    """Semantic cluster of sentences within an article."""
+    __tablename__ = 'article_clusters'
+
+    id = Column(Integer, primary_key=True)
+    article_id = Column(Integer, ForeignKey('articles.id', ondelete='CASCADE'), nullable=False, index=True)
+    cluster_label = Column(Integer, nullable=False)  # 0, 1, 2... or -1 for noise
+    category = Column(Enum(ClusterCategory), nullable=False)  # core, secondary, filler
+    score = Column(Float, nullable=False, default=0.0)  # Importance score 0.0-1.0
+    size = Column(Integer, nullable=False, default=0)  # Number of sentences in cluster
+    centroid_embedding = Column(JSON, nullable=True)  # List of floats representing centroid
+    sentence_indices = Column(JSON, nullable=False)  # List of sentence indices [0, 3, 5...]
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
+
+    # Relationships
+    article = relationship('Article', back_populates='clusters')
+
+    # Indexes
+    __table_args__ = (
+        Index('idx_article_cluster_article', 'article_id'),
+        Index('idx_article_cluster_category', 'category'),
+        Index('idx_article_cluster_score', 'score'),
+    )
+
+    def __repr__(self):
+        return f"<ArticleCluster(id={self.id}, article_id={self.article_id}, label={self.cluster_label}, category={self.category.value}, score={self.score:.2f})>"
+
+
+class ArticleSentence(Base):
+    """Individual sentence in an article with its cluster assignment."""
+    __tablename__ = 'article_sentences'
+
+    id = Column(Integer, primary_key=True)
+    article_id = Column(Integer, ForeignKey('articles.id', ondelete='CASCADE'), nullable=False, index=True)
+    sentence_index = Column(Integer, nullable=False)  # Position in article (0-based)
+    sentence_text = Column(Text, nullable=False)
+    cluster_id = Column(Integer, ForeignKey('article_clusters.id', ondelete='SET NULL'), nullable=True, index=True)
+    embedding = Column(JSON, nullable=True)  # List of floats, optional
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    # Relationships
+    article = relationship('Article', back_populates='sentences')
+    cluster = relationship('ArticleCluster', backref='sentences')
+
+    # Indexes
+    __table_args__ = (
+        Index('idx_article_sentence_article', 'article_id'),
+        Index('idx_article_sentence_index', 'article_id', 'sentence_index'),
+        Index('idx_article_sentence_cluster', 'cluster_id'),
+    )
+
+    def __repr__(self):
+        return f"<ArticleSentence(id={self.id}, article_id={self.article_id}, index={self.sentence_index}, cluster_id={self.cluster_id})>"

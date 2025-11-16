@@ -160,12 +160,14 @@ def delete(domain_name):
 
 
 @domain.command()
-def stats():
+@click.option('--clusters', is_flag=True, help='Include cluster statistics')
+def stats(clusters):
     """
     Show statistics about all sources.
 
-    Example:
+    Examples:
         news domain stats
+        news domain stats --clusters
     """
     db = Database()
     session = db.get_session()
@@ -198,6 +200,44 @@ def stats():
         click.echo(f"{'Enriched':30} {click.style(str(total_enriched), fg='green'):5} articles")
         click.echo(f"{'Pending enrichment':30} {click.style(str(total_pending), fg='yellow'):5} articles")
         click.echo(f"{'Sources':30} {len(sources):5}")
+
+        # Show cluster statistics if requested
+        if clusters:
+            from db import ArticleCluster, ClusterCategory
+
+            click.echo(click.style("\n=== Cluster Statistics ===\n", fg="cyan", bold=True))
+
+            # Count articles with clusters
+            cluster_enriched_articles = session.query(Article).filter(
+                Article.cluster_enriched_at.isnot(None)
+            ).count()
+
+            click.echo(f"{'Articles with clusters':30} {click.style(str(cluster_enriched_articles), fg='green'):5}")
+            click.echo(f"{'Pending clustering':30} {click.style(str(total_articles - cluster_enriched_articles), fg='yellow'):5}")
+
+            if cluster_enriched_articles > 0:
+                # Total clusters
+                total_clusters = session.query(ArticleCluster).count()
+
+                # Clusters by category
+                core_clusters = session.query(ArticleCluster).filter_by(
+                    category=ClusterCategory.CORE
+                ).count()
+                secondary_clusters = session.query(ArticleCluster).filter_by(
+                    category=ClusterCategory.SECONDARY
+                ).count()
+                filler_clusters = session.query(ArticleCluster).filter_by(
+                    category=ClusterCategory.FILLER
+                ).count()
+
+                # Average clusters per article
+                avg_clusters = total_clusters / cluster_enriched_articles
+
+                click.echo(f"\n{'Total clusters':30} {total_clusters:5}")
+                click.echo(f"{'Avg clusters/article':30} {avg_clusters:5.1f}")
+                click.echo(f"{'Core clusters':30} {click.style(str(core_clusters), fg='green'):5} ({100*core_clusters/total_clusters if total_clusters > 0 else 0:.1f}%)")
+                click.echo(f"{'Secondary clusters':30} {click.style(str(secondary_clusters), fg='yellow'):5} ({100*secondary_clusters/total_clusters if total_clusters > 0 else 0:.1f}%)")
+                click.echo(f"{'Filler clusters':30} {click.style(str(filler_clusters), fg='white'):5} ({100*filler_clusters/total_clusters if total_clusters > 0 else 0:.1f}%)")
 
     finally:
         session.close()

@@ -1,13 +1,14 @@
 """
 Article enrichment module.
-Includes Named Entity Recognition (NER) using spaCy.
+Includes Named Entity Recognition (NER) using spaCy and semantic sentence clustering.
 """
 
 import spacy
 from datetime import datetime
 from sqlalchemy import insert, update
-from db import ProcessingBatch, BatchItem, Article, NamedEntity, EntityType
+from db import ProcessingBatch, BatchItem, Article, NamedEntity, EntityType, ArticleCluster, ArticleSentence, ClusterCategory
 from db.models import article_entities
+from processors.clustering import extract_sentences, make_embeddings, cluster_article
 
 
 # Load spaCy model (Spanish)
@@ -99,6 +100,51 @@ def calculate_entity_relevance(article, entity_text, mentions, total_mentions):
     return round(score, 6)  # Keep precision for very small values
 
 
+def calculate_cluster_boost(entity_text, clusters_info, sentences):
+    """
+    Calculate relevance boost based on entity presence in semantic clusters.
+
+    Args:
+        entity_text: The entity text to search for
+        clusters_info: List of cluster dicts from clustering
+        sentences: List of sentence strings
+
+    Returns:
+        float: Boost multiplier (1.3 for core, 1.0 for secondary, 0.7 otherwise)
+    """
+    entity_lower = entity_text.lower()
+
+    # Check each cluster category
+    in_core = False
+    in_secondary = False
+
+    for cluster in clusters_info:
+        category = cluster.get('category', 'filler')
+        indices = cluster.get('indices', [])
+
+        # Check if entity appears in any sentence of this cluster
+        for idx in indices:
+            if idx < len(sentences):
+                sentence_lower = sentences[idx].lower()
+                if entity_lower in sentence_lower:
+                    if category == 'core':
+                        in_core = True
+                        break  # Core takes precedence
+                    elif category == 'secondary':
+                        in_secondary = True
+
+        if in_core:
+            break  # No need to check further
+
+    # Apply boost
+    if in_core:
+        return 1.3
+    elif in_secondary:
+        return 1.0
+    else:
+        return 0.7
+
+
 def extract_entities(text):
     """
     Extract named entities from text using spaCy.
@@ -126,7 +172,7 @@ def extract_entities(text):
 
 def process_article(article, batch_item, session):
     """
-    Process a single article: extract entities and associate them.
+    Process a single article: clustering → NER with cluster-based relevance boost.
 
     Args:
         article: Article object
@@ -138,6 +184,8 @@ def process_article(article, batch_item, session):
     """
     logs = []
     stats = {
+        'sentences_extracted': 0,
+        'clusters_found': 0,
         'entities_found': 0,
         'entities_new': 0,
         'entities_existing': 0,
@@ -151,6 +199,63 @@ def process_article(article, batch_item, session):
 
     try:
         logs.append(f"Processing article {article.id}: {article.title[:50]}...")
+
+        # ========== PHASE 1: SEMANTIC CLUSTERING ==========
+        logs.append("Phase 1: Extracting and clustering sentences...")
+
+        # Extract sentences from content (title separate)
+        sentences = extract_sentences(article.content)
+        stats['sentences_extracted'] = len(sentences)
+        logs.append(f"Extracted {len(sentences)} sentences")
+
+        clusters_info = []
+        labels = []
+
+        if len(sentences) > 0:
+            # Generate title embedding separately
+            title_embedding = make_embeddings([article.title])
+
+            # Cluster sentences
+            clusters_info, labels, probs = cluster_article(sentences, title_embedding)
+            stats['clusters_found'] = len(clusters_info)
+            logs.append(f"Found {len(clusters_info)} clusters")
+
+            # Save clusters to database
+            for cluster_data in clusters_info:
+                cluster = ArticleCluster(
+                    article_id=article.id,
+                    cluster_label=int(cluster_data['label']),  # Convert numpy int to Python int
+                    category=ClusterCategory[cluster_data['category'].upper()],
+                    score=float(cluster_data['score']),  # Ensure float type
+                    size=int(cluster_data['size']),  # Ensure int type
+                    centroid_embedding=cluster_data['centroid'],
+                    sentence_indices=cluster_data['indices']
+                )
+                session.add(cluster)
+                session.flush()
+
+                logs.append(f"  Cluster {cluster_data['label']}: {cluster_data['category']} "
+                           f"(score={cluster_data['score']:.2f}, size={cluster_data['size']})")
+
+                # Save sentences with cluster assignment
+                for idx in cluster_data['indices']:
+                    if idx < len(sentences):
+                        sentence = ArticleSentence(
+                            article_id=article.id,
+                            sentence_index=idx,
+                            sentence_text=sentences[idx],
+                            cluster_id=cluster.id
+                        )
+                        session.add(sentence)
+
+            # Mark as cluster-enriched
+            article.cluster_enriched_at = datetime.utcnow()
+            logs.append("Clustering complete")
+        else:
+            logs.append("No sentences found, skipping clustering")
+
+        # ========== PHASE 2: NER ==========
+        logs.append("Phase 2: Extracting named entities...")
 
         # Extract entities from title and content
         text = f"{article.title} {article.content}"
@@ -173,7 +278,7 @@ def process_article(article, batch_item, session):
         total_mentions = sum(entity_counts.values())
 
         # First pass: Calculate raw relevances and create/update entities
-        entity_relevances = []  # List of (entity_text, entity_id, mention_count, raw_relevance)
+        entity_relevances = []  # List of (entity_text, entity_id, mention_count, raw_relevance, cluster_boost)
 
         for entity_text, mention_count in entity_counts.items():
             # Find entity type from original entities list
@@ -201,19 +306,30 @@ def process_article(article, batch_item, session):
 
             # Calculate raw relevance for this entity in this article
             raw_relevance = calculate_entity_relevance(article, entity_text, mention_count, total_mentions)
-            entity_relevances.append((entity_text, entity.id, mention_count, raw_relevance))
 
+            # ========== PHASE 2.1: APPLY CLUSTER BOOST ==========
+            cluster_boost = 1.0
+            if clusters_info:
+                cluster_boost = calculate_cluster_boost(entity_text, clusters_info, sentences)
+
+            entity_relevances.append((entity_text, entity.id, mention_count, raw_relevance, cluster_boost))
+
+        # ========== PHASE 3: NORMALIZATION ==========
         # Normalize relevances so the most relevant entity has a score of 1.0
+        # (after applying cluster boost)
         if entity_relevances:
-            max_relevance = max(rel for _, _, _, rel in entity_relevances)
+            # Apply cluster boost before normalization
+            boosted_relevances = [(et, eid, mc, rv * cb, cb) for et, eid, mc, rv, cb in entity_relevances]
+            max_relevance = max(rv for _, _, _, rv, _ in boosted_relevances)
+
             if max_relevance > 0:
                 normalization_factor = 1.0 / max_relevance
             else:
                 normalization_factor = 1.0  # All relevances are 0, no normalization needed
 
             # Second pass: Insert with normalized relevances
-            for entity_text, entity_id, mention_count, raw_relevance in entity_relevances:
-                normalized_relevance = raw_relevance * normalization_factor
+            for entity_text, entity_id, mention_count, boosted_relevance, cluster_boost in boosted_relevances:
+                normalized_relevance = boosted_relevance * normalization_factor
 
                 # Insert into article_entities association table
                 stmt = insert(article_entities).values(
@@ -224,8 +340,10 @@ def process_article(article, batch_item, session):
                 )
                 session.execute(stmt)
 
-                logs.append(f"  {entity_text}: {mention_count} mentions, relevance={normalized_relevance:.4f}")
+                logs.append(f"  {entity_text}: {mention_count} mentions, "
+                           f"boost={cluster_boost:.1f}x, relevance={normalized_relevance:.4f}")
 
+        # ========== PHASE 4: UPDATE DB RECORDS ==========
         # Mark article as enriched
         article.enriched_at = datetime.utcnow()
 

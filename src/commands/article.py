@@ -191,7 +191,8 @@ def list(limit, source, tag, enriched, pending_enrich, no_pager):
 @click.argument('article_id', type=int)
 @click.option('--full', '-f', is_flag=True, help='Show full article content')
 @click.option('--entities', '-e', is_flag=True, help='Show extracted entities (NER)')
-def show(article_id, full, entities):
+@click.option('--clusters', '-c', is_flag=True, help='Show sentence clusters')
+def show(article_id, full, entities, clusters):
     """
     Show article details by ID.
 
@@ -199,6 +200,7 @@ def show(article_id, full, entities):
         news article show 1
         news article show 1 --full
         news article show 1 --entities
+        news article show 1 --clusters
     """
     db = Database()
     session = db.get_session()
@@ -259,6 +261,52 @@ def show(article_id, full, entities):
                         click.echo(f"    Type: {entity_type.value}")
                         click.echo(f"    Mentions: {mentions}")
                         click.echo(f"    Relevance: {relevance:.2f}")
+
+        # Show clusters if requested
+        if clusters:
+            from db import ArticleCluster, ArticleSentence
+
+            click.echo(f"\n{click.style('Clusters:', bold=True)}")
+
+            if not art.cluster_enriched_at:
+                click.echo(click.style("  Article has not been cluster-enriched yet", fg="yellow"))
+            else:
+                # Query clusters for this article
+                article_clusters = session.query(ArticleCluster).filter_by(
+                    article_id=article_id
+                ).order_by(ArticleCluster.score.desc()).all()
+
+                if not article_clusters:
+                    click.echo(click.style("  No clusters found", fg="yellow"))
+                else:
+                    click.echo(f"  Total clusters: {len(article_clusters)}\n")
+
+                    for cluster in article_clusters:
+                        # Color code by category
+                        category_colors = {
+                            'core': 'green',
+                            'secondary': 'yellow',
+                            'filler': 'white'
+                        }
+                        color = category_colors.get(cluster.category.value, 'white')
+
+                        click.echo(click.style(f"  Cluster {cluster.cluster_label}: {cluster.category.value.upper()}",
+                                             fg=color, bold=True))
+                        click.echo(f"    Score: {cluster.score:.3f}")
+                        click.echo(f"    Size: {cluster.size} sentences")
+                        click.echo(f"    Sentence indices: {cluster.sentence_indices}")
+
+                        # Show first 2 sentences as examples
+                        cluster_sentences = session.query(ArticleSentence).filter_by(
+                            cluster_id=cluster.id
+                        ).order_by(ArticleSentence.sentence_index).limit(2).all()
+
+                        if cluster_sentences:
+                            click.echo(f"    Sample sentences:")
+                            for sent in cluster_sentences:
+                                preview = sent.sentence_text[:80] + "..." if len(sent.sentence_text) > 80 else sent.sentence_text
+                                click.echo(f"      [{sent.sentence_index}] {preview}")
+                        click.echo()
 
         click.echo(f"\nContent ({len(art.content)} chars):")
         click.echo("-" * 80)
