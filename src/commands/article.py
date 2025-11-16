@@ -104,7 +104,10 @@ def fetch(url):
 @click.option('--limit', '-l', default=10, help='Number of articles to show')
 @click.option('--source', '-s', help='Filter by source domain')
 @click.option('--tag', '-t', help='Filter by tag')
-def list(limit, source, tag):
+@click.option('--preprocessed', is_flag=True, help='Show only preprocessed articles')
+@click.option('--pending-preprocess', is_flag=True, help='Show only articles pending preprocessing')
+@click.option('--no-pager', is_flag=True, help='Disable pagination')
+def list(limit, source, tag, preprocessed, pending_preprocess, no_pager):
     """
     List articles from database.
 
@@ -113,32 +116,72 @@ def list(limit, source, tag):
         news article list --limit 20
         news article list --source diariolibre.com
         news article list --tag España
+        news article list --preprocessed
+        news article list --pending-preprocess
     """
     db = Database()
     session = db.get_session()
 
     try:
+        # Build query
+        query = session.query(Article)
+
+        # Apply filters
         if source:
-            articles = db.get_articles_by_source(session, source, limit)
-            click.echo(f"Articles from {source}:\n")
-        elif tag:
-            articles = db.get_articles_by_tag(session, tag, limit)
-            click.echo(f"Articles tagged with '{tag}':\n")
+            from db import Source
+            query = query.join(Source).filter(Source.domain == source)
+
+        if tag:
+            query = query.join(Article.tags).filter(Tag.name == tag)
+
+        if preprocessed:
+            query = query.filter(Article.preprocessed_at.isnot(None))
+        elif pending_preprocess:
+            query = query.filter(Article.preprocessed_at.is_(None))
+
+        # Order and limit
+        articles = query.order_by(Article.created_at.desc()).limit(limit).all()
+
+        # Build header
+        header_parts = []
+        if preprocessed:
+            header_parts.append("Preprocessed")
+        elif pending_preprocess:
+            header_parts.append("Pending preprocessing")
+        if source:
+            header_parts.append(f"from {source}")
+        if tag:
+            header_parts.append(f"tagged with '{tag}'")
+
+        if header_parts:
+            header = f"{' '.join(header_parts)} articles:\n"
         else:
-            articles = db.get_recent_articles(session, limit)
-            click.echo(f"Recent articles:\n")
+            header = f"Recent articles:\n"
 
         if not articles:
+            click.echo(header)
             click.echo(click.style("No articles found", fg="yellow"))
             return
 
+        # Build output
+        output_lines = [header]
         for art in articles:
-            click.echo(f"[{art.id}] {art.title}")
-            click.echo(f"    Source: {art.source.domain}")
-            click.echo(f"    Date: {art.published_date}")
-            click.echo(f"    Tags: {', '.join([t.name for t in art.tags[:3]])}{'...' if len(art.tags) > 3 else ''}")
-            click.echo(f"    Hash: {art.hash[:16]}...")
-            click.echo()
+            preprocess_status = click.style("✓", fg="green") if art.preprocessed_at else click.style("○", fg="yellow")
+            output_lines.append(f"{preprocess_status} [{art.id}] {art.title}")
+            output_lines.append(f"    Source: {art.source.domain}")
+            output_lines.append(f"    Date: {art.published_date}")
+            output_lines.append(f"    Tags: {', '.join([t.name for t in art.tags[:3]])}{'...' if len(art.tags) > 3 else ''}")
+            if art.preprocessed_at:
+                output_lines.append(f"    Preprocessed: {art.preprocessed_at}")
+            output_lines.append("")
+
+        output_text = "\n".join(output_lines)
+
+        # Use pager if more than 20 results and not disabled
+        if len(articles) > 20 and not no_pager:
+            click.echo_via_pager(output_text)
+        else:
+            click.echo(output_text)
 
     finally:
         session.close()
@@ -147,13 +190,15 @@ def list(limit, source, tag):
 @article.command()
 @click.argument('article_id', type=int)
 @click.option('--full', '-f', is_flag=True, help='Show full article content')
-def show(article_id, full):
+@click.option('--entities', '-e', is_flag=True, help='Show extracted entities (NER)')
+def show(article_id, full, entities):
     """
     Show article details by ID.
 
     Examples:
         news article show 1
         news article show 1 --full
+        news article show 1 --entities
     """
     db = Database()
     session = db.get_session()
@@ -174,8 +219,47 @@ def show(article_id, full):
         click.echo(f"Source: {art.source.domain}")
         click.echo(f"Category: {art.category or 'N/A'}")
         click.echo(f"Tags: {', '.join([t.name for t in art.tags])}")
+        click.echo(f"Preprocessed: {click.style('Yes', fg='green') if art.preprocessed_at else click.style('No', fg='yellow')} {f'({art.preprocessed_at})' if art.preprocessed_at else ''}")
         click.echo(f"URL: {art.url}")
         click.echo(f"Hash: {art.hash}")
+
+        # Show entities if requested
+        if entities:
+            from db.models import article_entities
+            from db import NamedEntity
+            from sqlalchemy import select
+
+            click.echo(f"\n{click.style('Entities:', bold=True)}")
+
+            if not art.preprocessed_at:
+                click.echo(click.style("  Article has not been preprocessed yet", fg="yellow"))
+            else:
+                # Query article_entities association table
+                stmt = select(
+                    NamedEntity.name,
+                    NamedEntity.entity_type,
+                    article_entities.c.mentions,
+                    article_entities.c.relevance
+                ).join(
+                    NamedEntity, article_entities.c.entity_id == NamedEntity.id
+                ).where(
+                    article_entities.c.article_id == article_id
+                ).order_by(
+                    article_entities.c.mentions.desc()
+                )
+
+                results = session.execute(stmt).fetchall()
+
+                if not results:
+                    click.echo(click.style("  No entities found", fg="yellow"))
+                else:
+                    click.echo(f"  Total entities: {len(results)}\n")
+                    for name, entity_type, mentions, relevance in results:
+                        click.echo(f"  • {name}")
+                        click.echo(f"    Type: {entity_type.value}")
+                        click.echo(f"    Mentions: {mentions}")
+                        click.echo(f"    Relevance: {relevance:.2f}")
+
         click.echo(f"\nContent ({len(art.content)} chars):")
         click.echo("-" * 80)
 

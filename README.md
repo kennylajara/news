@@ -92,10 +92,13 @@ uv run news article list                           # Últimos 10
 uv run news article list --limit 20                # Con límite
 uv run news article list --source diariolibre.com  # Por fuente
 uv run news article list --tag "política"          # Por tag
+uv run news article list --preprocessed            # Solo preprocesados
+uv run news article list --pending-preprocess      # Pendientes de preprocesar
 
 # Ver artículo
-uv run news article show <ID>         # Vista previa
-uv run news article show <ID> --full  # Artículo completo
+uv run news article show <ID>          # Vista previa
+uv run news article show <ID> --full   # Artículo completo
+uv run news article show <ID> --entities  # Ver entidades extraídas (NER)
 
 # Eliminar artículo
 uv run news article delete <ID>
@@ -116,7 +119,28 @@ uv run news domain add <dominio> --name "Nombre"
 uv run news domain delete <dominio>
 
 # Procesar artículos (NER con spaCy)
-uv run news domain process -d <dominio> -t pre_process_articles -s 10
+uv run news domain process start -d <dominio> -t pre_process_articles -s 10
+uv run news domain process list                      # Ver batches
+uv run news domain process list --status completed   # Filtrar por estado
+uv run news domain process show <batch_id>           # Ver detalles de batch
+uv run news domain process show <batch_id> --item <item_id>  # Ver logs de item específico
+```
+
+### Entidades
+
+```bash
+# Listar entidades
+uv run news entity list                              # Top 20 por relevancia
+uv run news entity list --limit 50                   # Con límite
+uv run news entity list --type person                # Filtrar por tipo
+uv run news entity list --min-relevance 10           # Filtrar por relevancia mínima
+
+# Ver entidad y artículos que la mencionan
+uv run news entity show "Luis Abinader"
+uv run news entity show "Policía" --limit 20
+
+# Buscar entidades
+uv run news entity search "Luis"
 ```
 
 ## Tecnologías
@@ -131,6 +155,7 @@ uv run news domain process -d <dominio> -t pre_process_articles -s 10
 
 ## Documentación
 
+- **[Referencia de Comandos](docs/commands.md)** - Documentación completa de todos los comandos CLI
 - **[Arquitectura](docs/architecture.md)** - Flujo de componentes, pipeline, patrones
 - **[Base de Datos](docs/database.md)** - Esquema, operaciones CRUD, deduplicación
 - **[Crear Extractores](docs/extractors.md)** - Guía completa con templates y ejemplos

@@ -44,10 +44,15 @@ Este archivo proporciona reglas y buenas prácticas para Claude Code al trabajar
 ### 6. CLI Commands
 
 - Usar **Click**
-- Comandos agrupados: `article` y `domain`
+- Comandos agrupados: `article`, `domain`, y `entity`
 - Output con colores: verde=éxito, rojo=error, amarillo=advertencia
 - Confirmaciones para operaciones destructivas
 - Ver `--help` siempre debe ser útil
+- **TODOS los comandos que listan resultados DEBEN tener paginación**:
+  - Usar `click.echo_via_pager()` cuando hay más de 20 resultados
+  - Permitir override con variable de entorno o flag `--no-pager`
+  - Formato de paginación: preparar output completo y pasar a pager
+  - Ejemplo: `click.echo_via_pager(output_text)`
 
 ### 7. Dependencias
 
