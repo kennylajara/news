@@ -6,7 +6,7 @@ Includes Named Entity Recognition (NER) using spaCy and semantic sentence cluste
 import spacy
 from datetime import datetime
 from sqlalchemy import insert, update
-from db import ProcessingBatch, BatchItem, Article, NamedEntity, EntityType, ArticleCluster, ArticleSentence, ClusterCategory
+from db import ProcessingBatch, BatchItem, Article, NamedEntity, EntityType, ArticleCluster, ArticleSentence, ClusterCategory, FlashNews
 from db.models import article_entities
 from processors.clustering import extract_sentences, make_embeddings, cluster_article
 
@@ -251,6 +251,84 @@ def process_article(article, batch_item, session):
             # Mark as cluster-enriched
             article.cluster_enriched_at = datetime.utcnow()
             logs.append("Clustering complete")
+
+            # ========== PHASE 1.1: CLUSTER SUMMARIZATION ==========
+            logs.append("Phase 1.1: Generating flash news from core clusters...")
+
+            core_clusters = [c for c in clusters_info if c['category'] == 'core']
+            stats['flash_news_generated'] = 0
+
+            if core_clusters:
+                logs.append(f"Found {len(core_clusters)} core clusters to summarize")
+
+                try:
+                    from llm.openai_client import openai_structured_output
+
+                    for cluster_data in core_clusters:
+                        try:
+                            # Find the cluster object we just created
+                            cluster = session.query(ArticleCluster).filter_by(
+                                article_id=article.id,
+                                cluster_label=int(cluster_data['label'])
+                            ).first()
+
+                            if not cluster:
+                                logs.append(f"  Warning: Could not find cluster {cluster_data['label']} in DB")
+                                continue
+
+                            # Check if flash news already exists for this cluster
+                            existing_flash = session.query(FlashNews).filter_by(cluster_id=cluster.id).first()
+                            if existing_flash:
+                                logs.append(f"  Skipping cluster {cluster_data['label']}: flash news already exists")
+                                continue
+
+                            # Get sentences for this cluster
+                            cluster_sentences = [sentences[idx] for idx in cluster_data['indices'] if idx < len(sentences)]
+
+                            # Prepare data for LLM
+                            llm_data = {
+                                'title': article.title,
+                                'cluster_sentences': cluster_sentences,
+                                'cluster_score': cluster_data['score']
+                            }
+
+                            # Call OpenAI for structured summarization
+                            result = openai_structured_output('core_cluster_summarization', llm_data)
+                            summary_text = result.summary
+
+                            # Generate embedding for the summary
+                            summary_embedding = make_embeddings([summary_text])
+                            summary_embedding_list = summary_embedding[0].tolist()
+
+                            # Create FlashNews record
+                            flash_news = FlashNews(
+                                cluster_id=cluster.id,
+                                summary=summary_text,
+                                embedding=summary_embedding_list,
+                                published=0
+                            )
+                            session.add(flash_news)
+                            session.flush()
+
+                            stats['flash_news_generated'] += 1
+                            logs.append(f"  ✓ Cluster {cluster_data['label']}: Generated flash news (ID: {flash_news.id})")
+                            logs.append(f"    Summary: {summary_text[:100]}...")
+
+                        except Exception as cluster_error:
+                            # Log error but continue processing other clusters
+                            logs.append(f"  ✗ Failed to generate flash news for cluster {cluster_data['label']}: {str(cluster_error)}")
+                            continue
+
+                    logs.append(f"Generated {stats['flash_news_generated']} flash news from {len(core_clusters)} core clusters")
+
+                except ImportError as e:
+                    logs.append(f"Warning: Could not import OpenAI client, skipping summarization: {e}")
+                except Exception as e:
+                    logs.append(f"Warning: Error during cluster summarization: {e}")
+
+            else:
+                logs.append("No core clusters found, skipping flash news generation")
+
         else:
             logs.append("No sentences found, skipping clustering")
 

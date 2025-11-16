@@ -286,3 +286,29 @@ class ArticleSentence(Base):
 
     def __repr__(self):
         return f"<ArticleSentence(id={self.id}, article_id={self.article_id}, index={self.sentence_index}, cluster_id={self.cluster_id})>"
+
+
+class FlashNews(Base):
+    """Flash news generated from core article clusters."""
+    __tablename__ = 'flash_news'
+
+    id = Column(Integer, primary_key=True)
+    cluster_id = Column(Integer, ForeignKey('article_clusters.id', ondelete='CASCADE'), nullable=False, unique=True, index=True)
+    summary = Column(Text, nullable=False)  # LLM-generated summary
+    embedding = Column(JSON, nullable=True)  # Vector embedding of summary (list of floats)
+    published = Column(Integer, nullable=False, default=0)  # 0=unpublished, 1=published (SQLite doesn't have native boolean)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
+
+    # Relationships
+    cluster = relationship('ArticleCluster', backref='flash_news')
+
+    # Indexes
+    __table_args__ = (
+        Index('idx_flash_news_cluster', 'cluster_id'),
+        Index('idx_flash_news_published', 'published'),
+        Index('idx_flash_news_created', 'created_at'),
+    )
+
+    def __repr__(self):
+        return f"<FlashNews(id={self.id}, cluster_id={self.cluster_id}, published={bool(self.published)}, summary='{self.summary[:50]}...')>"

@@ -76,13 +76,36 @@ Este archivo proporciona reglas y buenas prácticas para Claude Code al trabajar
   - `asyncio` para concurrencia
   - Mantener API síncrona del CLI
 
-### 10. Seguridad
+### 10. Variables de Entorno y Configuración
+
+- **Usar `src/settings.py`** para acceder a variables de entorno
+- **Nunca** acceder directamente a `os.getenv()` desde otros módulos
+- Usar función `get_setting(key, default)` que protege contra modificación accidental
+- **Archivo `.env` NO se commitea** - solo `.env.example`
+- Variables sensibles: `OPENAI_API_KEY`, `DEBUG`, etc.
+- Al agregar nueva configuración, actualizar `.env.example`
+
+### 11. LLM y Structured Outputs
+
+- **Modelo usado**: `gpt-5`, `gpt-5-mini` o `gpt-5-nano` (modelo más reciente, eficiente y económico que gpt-4o)
+  - Configurable vía `OPENAI_MODEL` en `.env`
+  - Default en `src/settings.py` es `gpt-5-nano`
+- **Estructura de prompts**: Dos archivos Jinja separados
+  - `{task}_system_prompt.md.jinja` - Instrucciones para el LLM
+  - `{task}_user_prompt.md.jinja` - Datos específicos del contexto
+- **Schema Pydantic**: `{task}.py` con clase `StructuredOutput`
+- **Ubicación**: Todos en `src/llm/prompts/`
+- **Wrapper genérico**: Usar `openai_structured_output(task_name, data)`
+- **Manejo de errores**: LLM puede fallar, no debe romper todo el procesamiento
+- **Rate limits**: Considerar límites de la API de OpenAI
+
+### 12. Seguridad
 
 - User-Agent header para evitar bloqueos
-- No guardar credenciales en código
+- **API keys en `.env`**, nunca en código
 - Sanitizar HTML antes de parsear (ya implementado en `clean_html()`)
 
-### 11. Git y Commits
+### 13. Git y Commits
 
 - Este proyecto **requiere commits firmados con GPG**
 - Claude Code **NO puede firmar commits**
@@ -101,6 +124,7 @@ Para detalles técnicos, consultar:
 - **[docs/architecture.md](docs/architecture.md)** - Arquitectura del sistema, flujo de datos, patrones
 - **[docs/database.md](docs/database.md)** - Esquema de base de datos, operaciones CRUD
 - **[docs/extractors.md](docs/extractors.md)** - Guía completa para crear extractores
+- **[docs/processing.md](docs/processing.md)** - Sistema de batches, NER, clustering y flash news
 
 > Importante: Siempre actualizar la documentación técnica cuando se modifica código relacionado a lo que está documentado
 
@@ -109,12 +133,16 @@ Para detalles técnicos, consultar:
 ```bash
 # Setup inicial
 uv sync
+cp .env.example .env  # Configurar API keys
 
 # Ejecutar CLI
 uv run news --help
 uv run news article fetch "<URL>"
 uv run news article list
 uv run news domain stats
+
+# Procesar artículos con IA
+uv run news domain process start -d diariolibre.com -t enrich_article -s 10
 
 # Acceso directo a base de datos
 sqlite3 data/news.db

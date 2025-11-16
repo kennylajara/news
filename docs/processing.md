@@ -8,13 +8,16 @@ El sistema de procesamiento por lotes permite ejecutar diferentes tipos de proce
 
 ### Enriquecimiento de Artículos (`enrich_article`)
 
-Extrae entidades nombradas (NER - Named Entity Recognition) de los artículos usando spaCy.
+Proceso completo que incluye clustering semántico, generación de flash news con LLM, y extracción de entidades nombradas (NER).
 
 **Características**:
-- Modelo: `es_core_news_sm` (español)
-- Extrae 18 tipos de entidades (personas, organizaciones, lugares, etc.)
+- **Clustering semántico** de oraciones con clasificación (core, secondary, filler)
+- **Generación automática de flash news** desde clusters core usando OpenAI
+- **NER con spaCy**: Modelo `es_core_news_sm` (español), 18 tipos de entidades
+- **Relevancia ajustada por clusters**: Entidades en clusters core reciben boost
+- **Embeddings automáticos** para resúmenes y búsqueda semántica
 - Asocia entidades a artículos con conteo de menciones
-- **Calcula relevancia local** (ver sección "Cálculo de Relevancia")
+- Calcula relevancia local (ver sección "Cálculo de Relevancia")
 - Actualiza contador global de artículos por entidad
 - Guarda logs detallados del procesamiento
 
@@ -93,14 +96,49 @@ uv run news domain process show 1
 1. **Selección de artículos**: Se seleccionan artículos no enriquecidos (`enriched_at IS NULL`)
 2. **Creación de batch**: Se crea un registro en `processing_batches`
 3. **Creación de items**: Se crean registros en `batch_items` para cada artículo (transacción atómica)
-4. **Procesamiento**:
-   - Por cada artículo:
-     - Se extrae el texto (título + contenido)
-     - Se ejecuta NER con spaCy
-     - Se crean/actualizan entidades en `named_entities`
-     - Se asocian entidades al artículo en `article_entities` con menciones y relevancia
-     - Se marca el artículo como enriquecido (`enriched_at`)
-     - Se guardan logs y estadísticas
+4. **Procesamiento** (por cada artículo):
+
+   **FASE 1: Clustering Semántico**
+   - Extrae oraciones del contenido (excluye headers markdown)
+   - Genera embeddings con `paraphrase-multilingual-MiniLM-L12-v2`
+   - Clustering con UMAP + HDBSCAN
+   - Clasifica clusters en: core, secondary, filler
+   - Guarda en `article_clusters` y `article_sentences`
+   - Marca artículo como `cluster_enriched_at`
+
+   **FASE 1.1: Generación de Flash News** (NUEVO)
+   - Filtra clusters con categoría `core`
+   - Para cada cluster core:
+     - Renderiza prompts (system + user) con Jinja2
+     - Llama OpenAI API con Structured Outputs
+     - Recibe resumen JSON estructurado (validado con Pydantic)
+     - Genera embedding del resumen
+     - Crea registro `FlashNews` (published=0)
+   - Manejo robusto de errores: fallas individuales no afectan otros clusters
+
+   **FASE 2: Named Entity Recognition**
+   - Extrae entidades con spaCy desde título, subtítulo y contenido
+   - Detecta 18 tipos de entidades (PERSON, ORG, GPE, etc.)
+   - Cuenta menciones de cada entidad
+
+   **FASE 2.1: Cluster Boost**
+   - Aplica multiplicadores según presencia en clusters semánticos:
+     - Cluster core: 1.3x
+     - Cluster secondary: 1.0x
+     - Resto: 0.7x
+
+   **FASE 3: Normalización de Relevancia**
+   - Calcula relevancia base (menciones/total)
+   - Aplica bonos (título +50%, subtítulo +25%, posición, etc.)
+   - Aplica cluster boost
+   - Normaliza para que la entidad más relevante tenga score 1.0
+   - Guarda en `article_entities` con menciones y relevancia
+
+   **FASE 4: Actualización de Registros**
+   - Marca artículo como enriquecido (`enriched_at`)
+   - Actualiza batch item con logs y estadísticas
+   - Commit a base de datos
+
 5. **Finalización**: Se actualiza el batch con estadísticas finales
 
 ## Entidades Extraídas
@@ -322,3 +360,125 @@ JOIN sources s ON pb.source_id = s.id
 WHERE pb.completed_at IS NOT NULL
 ORDER BY pb.created_at DESC;
 ```
+
+## Flash News
+
+### Descripción
+
+Flash news son resúmenes narrativos concisos generados automáticamente desde los clusters semánticos identificados como "core" (núcleo) de los artículos. Cada flash news:
+
+- Resume las ideas principales de un cluster core (2-3 oraciones)
+- Es autocontenida y comprensible sin contexto adicional
+- Usa tono periodístico profesional en español
+- Incluye un embedding vectorial para búsqueda semántica
+- Tiene estado publicado/no publicado
+
+### Generación Automática
+
+El proceso de generación usa **OpenAI Structured Outputs** con:
+
+1. **Templates Jinja2 separados**:
+   - `{task}_system_prompt.md.jinja` - Instrucciones para el LLM
+   - `{task}_user_prompt.md.jinja` - Datos específicos del cluster
+
+2. **Schema Pydantic** (`{task}.py`):
+   - Valida la respuesta del LLM
+   - Garantiza formato JSON correcto
+
+3. **Wrapper genérico reutilizable** (`src/llm/openai_client.py`):
+   - Función `openai_structured_output(task_name, data)`
+   - Carga dinámicamente templates y schemas
+   - Renderiza prompts con datos del cluster
+   - Llama OpenAI API con validación estricta
+
+### Configuración Requerida
+
+Para usar la generación de flash news, necesitas configurar OpenAI API.
+
+Ver **[README.md](../README.md)** sección "Instalación" para instrucciones completas de configuración de variables de entorno (`.env` file).
+
+### Consultas SQL para Flash News
+
+**Listar flash news no publicadas**:
+```sql
+SELECT
+    fn.id,
+    fn.summary,
+    a.title as article_title,
+    ac.score as cluster_score,
+    fn.created_at
+FROM flash_news fn
+JOIN article_clusters ac ON fn.cluster_id = ac.id
+JOIN articles a ON ac.article_id = a.id
+WHERE fn.published = 0
+ORDER BY fn.created_at DESC;
+```
+
+**Estadísticas de flash news por fuente**:
+```sql
+SELECT
+    s.domain,
+    COUNT(fn.id) as total_flash_news,
+    SUM(fn.published) as published,
+    COUNT(fn.id) - SUM(fn.published) as unpublished
+FROM flash_news fn
+JOIN article_clusters ac ON fn.cluster_id = ac.id
+JOIN articles a ON ac.article_id = a.id
+JOIN sources s ON a.source_id = s.id
+GROUP BY s.domain
+ORDER BY total_flash_news DESC;
+```
+
+**Flash news con embeddings para búsqueda**:
+```sql
+SELECT
+    fn.id,
+    fn.summary,
+    LENGTH(fn.embedding) as embedding_size,
+    a.title
+FROM flash_news fn
+JOIN article_clusters ac ON fn.cluster_id = ac.id
+JOIN articles a ON ac.article_id = a.id
+WHERE fn.embedding IS NOT NULL;
+```
+
+### Crear Nuevas Tareas LLM
+
+Para agregar una nueva tarea de procesamiento con LLM:
+
+1. **Crear schema Pydantic** (`src/llm/prompts/{task}.py`):
+```python
+from pydantic import BaseModel, Field
+
+class StructuredOutput(BaseModel):
+    campo1: str = Field(description="Descripción del campo")
+    campo2: list[str] = Field(description="...")
+```
+
+2. **Crear prompt del sistema** (`src/llm/prompts/{task}_system_prompt.md.jinja`):
+```jinja
+Eres un experto en...
+
+Directrices:
+- Instrucción 1
+- Instrucción 2
+```
+
+3. **Crear prompt del usuario** (`src/llm/prompts/{task}_user_prompt.md.jinja`):
+```jinja
+**Datos de entrada:**
+{{ variable1 }}
+{{ variable2 }}
+
+Genera...
+```
+
+4. **Usar en código**:
+```python
+from llm.openai_client import openai_structured_output
+
+data = {'variable1': 'valor', 'variable2': 'otro valor'}
+result = openai_structured_output('nombre_de_tarea', data)
+print(result.campo1)
+```
+

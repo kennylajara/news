@@ -8,12 +8,24 @@ Este proyecto descarga noticias de diversos medios digitales, extrae su contenid
 
 ## Características
 
+### Extracción y Almacenamiento
 - **Extracción automática**: Descarga y limpia HTML de artículos de noticias
 - **Extractores por dominio**: Cada medio tiene su propio extractor especializado
 - **Conversión a Markdown**: El contenido se procesa preservando formato (negritas, enlaces, títulos)
 - **Base de datos SQLite**: Almacenamiento estructurado con relaciones (fuentes, artículos, tags)
 - **Deduplicación**: No reprocesa artículos ya descargados
+
+### Procesamiento Avanzado con IA
+- **Clustering semántico**: Agrupa oraciones por similitud temática (UMAP + HDBSCAN)
+- **Flash News automáticas**: LLM genera resúmenes concisos desde clusters core
+- **Named Entity Recognition**: Extrae personas, organizaciones, lugares, etc. con spaCy
+- **Relevancia ajustada por contexto**: Entidades en clusters importantes reciben mayor peso
+- **Embeddings vectoriales**: Permite búsqueda semántica de noticias similares
+
+### Interfaz
 - **CLI completo**: Interfaz de línea de comandos con Click
+- **Paginación automática**: Para listas largas de resultados
+- **Output con colores**: Verde=éxito, rojo=error, amarillo=advertencia
 
 ## Estructura del Proyecto
 
@@ -64,7 +76,17 @@ cd news
 uv sync
 ```
 
-4. Descargar modelo de spaCy para español:
+4. Configurar variables de entorno:
+```bash
+# Copiar template de configuración
+cp .env.example .env
+
+# Editar .env y agregar tu OpenAI API key
+# OPENAI_API_KEY=tu-api-key-aqui
+# OPENAI_MODEL=gpt-5-nano (opcional, ya es el default)
+```
+
+5. Descargar modelo de spaCy para español:
 ```bash
 uv run python -m spacy download es_core_news_sm
 ```
@@ -145,13 +167,23 @@ uv run news entity search "Luis"
 
 ## Tecnologías
 
+### Core
 - **Python 3.12+**
 - **uv**: Gestor de paquetes rápido
 - **Click**: Framework para CLI
 - **SQLAlchemy**: ORM para SQLite
+
+### Extracción y Procesamiento
 - **BeautifulSoup4 + lxml**: Parsing de HTML
 - **Requests**: Descarga HTTP
 - **spaCy**: Named Entity Recognition (NER)
+- **sentence-transformers**: Embeddings semánticos para clustering y búsqueda
+
+### LLM y Generación de Contenido
+- **OpenAI API**: Generación de flash news con Structured Outputs
+- **Pydantic**: Validación de schemas JSON
+- **Jinja2**: Templates para prompts
+- **python-dotenv**: Gestión de variables de entorno
 
 ## Documentación
 

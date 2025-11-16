@@ -340,6 +340,62 @@ Esto simplifica la lógica y evita duplicados.
 - Eliminar un `Article` → Se eliminan sus asociaciones en `article_tags`
 - Eliminar un `Tag` → Se eliminan sus asociaciones en `article_tags`
 
+### Tabla: `flash_news`
+
+Resúmenes narrativos generados automáticamente desde clusters core usando LLM.
+
+| Campo | Tipo | Restricciones | Descripción |
+|-------|------|---------------|-------------|
+| id | INTEGER | PRIMARY KEY | ID auto-incremental |
+| cluster_id | INTEGER | FOREIGN KEY, UNIQUE, NOT NULL, INDEX | ID del cluster (relación 1:1) |
+| summary | TEXT | NOT NULL | Resumen narrativo del cluster (2-3 oraciones) |
+| embedding | JSON | NULLABLE | Vector embedding del resumen (lista de floats) |
+| published | INTEGER | NOT NULL, DEFAULT 0, INDEX | Estado: 0=no publicado, 1=publicado |
+| created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Fecha de creación |
+| updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
+
+**Relaciones**:
+- 1:1 con `article_clusters` (un flash news pertenece a un cluster core)
+- Indirecto: `flash_news` → `article_clusters` → `articles`
+
+**Restricciones**:
+- `cluster_id` UNIQUE: Solo un flash news por cluster
+- `cluster_id` ON DELETE CASCADE: Si se elimina el cluster, se elimina el flash news
+- `published` es INTEGER (0/1) porque SQLite no tiene BOOLEAN nativo
+
+**Generación**:
+- Automática durante FASE 1.1 del procesamiento `enrich_article`
+- Solo se generan para clusters con `category='core'`
+- Usa OpenAI API con Structured Outputs (Pydantic validation)
+- Embedding generado con `sentence-transformers` (mismo modelo que clustering)
+
+**Uso**:
+- `published=0`: Flash news generada pero no publicada
+- `published=1`: Flash news lista para mostrar públicamente
+- Embedding permite búsqueda semántica de noticias similares
+
+**Índices**:
+- `cluster_id` (UNIQUE): Garantiza un solo flash news por cluster
+- `published`: Permite filtrado rápido por estado
+- `created_at`: Para ordenamiento cronológico
+
+**Ejemplo de consulta**:
+```sql
+-- Flash news no publicadas con info del artículo
+SELECT
+    fn.id,
+    fn.summary,
+    a.title,
+    a.published_date,
+    s.domain
+FROM flash_news fn
+JOIN article_clusters ac ON fn.cluster_id = ac.id
+JOIN articles a ON ac.article_id = a.id
+JOIN sources s ON a.source_id = s.id
+WHERE fn.published = 0
+ORDER BY fn.created_at DESC;
+```
+
 ## Acceso Directo
 
 Puedes acceder directamente a la base de datos:
@@ -350,6 +406,7 @@ sqlite3 data/news.db
 # Comandos útiles
 .tables                    # Listar tablas
 .schema articles           # Ver esquema de tabla
+.schema flash_news         # Ver esquema de flash news
 SELECT * FROM articles;    # Consultar datos
 .quit                      # Salir
 ```
