@@ -64,6 +64,11 @@ cd news
 uv sync
 ```
 
+4. Descargar modelo de spaCy para español:
+```bash
+uv run python -m spacy download es_core_news_sm
+```
+
 ## Uso
 
 El proyecto incluye una CLI completa construida con Click.
@@ -109,22 +114,27 @@ uv run news domain add <dominio> --name "Nombre"
 
 # Eliminar fuente
 uv run news domain delete <dominio>
+
+# Procesar artículos (NER con spaCy)
+uv run news domain process -d <dominio> -t pre_process_articles -s 10
 ```
 
 ## Tecnologías
 
 - **Python 3.12+**
 - **uv**: Gestor de paquetes rápido
-- **Click 8.3.0**: Framework para CLI
-- **SQLAlchemy 2.0**: ORM para SQLite
+- **Click**: Framework para CLI
+- **SQLAlchemy**: ORM para SQLite
 - **BeautifulSoup4 + lxml**: Parsing de HTML
 - **Requests**: Descarga HTTP
+- **spaCy**: Named Entity Recognition (NER)
 
 ## Documentación
 
 - **[Arquitectura](docs/architecture.md)** - Flujo de componentes, pipeline, patrones
 - **[Base de Datos](docs/database.md)** - Esquema, operaciones CRUD, deduplicación
 - **[Crear Extractores](docs/extractors.md)** - Guía completa con templates y ejemplos
+- **[Procesamiento](docs/processing.md)** - Sistema de batches y NER con spaCy
 
 ## Fuentes Soportadas
 

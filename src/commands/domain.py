@@ -3,7 +3,8 @@ Domain/source management commands.
 """
 
 import click
-from db import Database, Source
+from datetime import datetime
+from db import Database, Source, Article, ProcessingBatch, BatchItem, ProcessType
 
 
 @click.group()
@@ -177,5 +178,101 @@ def stats():
         click.echo(f"\n{'Total':30} {total_articles:5} articles")
         click.echo(f"{'Sources':30} {len(sources):5}")
 
+    finally:
+        session.close()
+
+
+@domain.command()
+@click.option('--domain', '-d', required=True, help='Domain to process')
+@click.option('--type', '-t', 'process_type', type=click.Choice(['pre_process_articles']), required=True, help='Type of processing')
+@click.option('--size', '-s', type=int, default=10, help='Batch size (default: 10)')
+def process(domain, process_type, size):
+    """
+    Create a processing batch for articles from a domain.
+
+    Example:
+        news domain process -d diariolibre.com -t pre_process_articles -s 10
+    """
+    db = Database()
+    session = db.get_session()
+
+    try:
+        # Get source
+        source = session.query(Source).filter_by(domain=domain).first()
+        if not source:
+            click.echo(click.style(f"✗ Domain '{domain}' not found", fg="red"))
+            return
+
+        # Map process type string to enum
+        process_type_enum = ProcessType.PRE_PROCESS_ARTICLES
+
+        # Get unprocessed articles (preprocessed_at is NULL), ordered by most recent first
+        unprocessed = (
+            session.query(Article)
+            .filter(Article.source_id == source.id)
+            .filter(Article.preprocessed_at.is_(None))
+            .order_by(Article.created_at.desc())
+            .limit(size)
+            .all()
+        )
+
+        if not unprocessed:
+            click.echo(click.style(f"✗ No unprocessed articles found for {domain}", fg="yellow"))
+            return
+
+        click.echo(f"Found {len(unprocessed)} unprocessed articles")
+        click.echo(f"Creating batch for {domain}...")
+
+        # Create batch and items atomically
+        try:
+            # Create batch
+            batch = ProcessingBatch(
+                source_id=source.id,
+                process_type=process_type_enum,
+                status='pending',
+                total_items=len(unprocessed),
+                processed_items=0,
+                successful_items=0,
+                failed_items=0
+            )
+            session.add(batch)
+            session.flush()
+
+            # Create batch items
+            for article in unprocessed:
+                item = BatchItem(
+                    batch_id=batch.id,
+                    article_id=article.id,
+                    status='pending'
+                )
+                session.add(item)
+
+            # Commit transaction atomically
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            raise Exception(f"Failed to create batch atomically: {e}")
+
+        click.echo(click.style(f"✓ Batch created (ID: {batch.id}) with {len(unprocessed)} articles", fg="green"))
+        click.echo(f"\nBatch details:")
+        click.echo(f"  Source: {domain}")
+        click.echo(f"  Type: {process_type}")
+        click.echo(f"  Articles: {len(unprocessed)}")
+        click.echo(f"\nNow processing batch...")
+
+        # Process the batch
+        from processors.pre_process import process_batch
+        success = process_batch(batch.id, session)
+
+        if success:
+            click.echo(click.style(f"\n✓ Batch processing completed successfully", fg="green"))
+        else:
+            click.echo(click.style(f"\n✗ Batch processing completed with errors", fg="yellow"))
+
+    except Exception as e:
+        session.rollback()
+        click.echo(click.style(f"✗ Error creating batch: {e}", fg="red"))
+        import traceback
+        traceback.print_exc()
     finally:
         session.close()

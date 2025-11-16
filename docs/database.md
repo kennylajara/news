@@ -67,13 +67,14 @@ Artículos de noticias completos con metadata.
 | location | VARCHAR(255) | | Ciudad de origen |
 | category | VARCHAR(255) | | Categoría/Subcategoría |
 | content | TEXT | NOT NULL | Contenido en formato Markdown |
-| processed_at | DATETIME | NULLABLE, INDEX | Fecha de procesamiento (NULL = no procesado) |
+| preprocessed_at | DATETIME | NULLABLE, INDEX | Fecha de preprocesamiento (NULL = no preprocesado) |
 | created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Fecha de creación en DB |
 | updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
 
 **Relaciones**:
 - N:1 con `sources` (muchos artículos pertenecen a un source)
 - M:N con `tags` vía `article_tags` (muchos artículos tienen muchos tags)
+- M:N con `named_entities` vía `article_entities` (muchos artículos tienen muchas entidades)
 
 **Índices**:
 - `hash` (UNIQUE): Para deduplicación rápida
@@ -228,6 +229,31 @@ Items individuales dentro de un batch de procesamiento.
 **Restricciones**:
 - `batch_id` ON DELETE CASCADE (si se elimina el batch, se eliminan sus items)
 - `article_id` ON DELETE CASCADE (si se elimina el artículo, se eliminan sus registros de procesamiento)
+
+### Tabla: `article_entities`
+
+Tabla de asociación para la relación muchos-a-muchos entre artículos y entidades nombradas.
+
+| Campo | Tipo | Restricciones | Descripción |
+|-------|------|---------------|-------------|
+| article_id | INTEGER | FOREIGN KEY, PRIMARY KEY | ID del artículo |
+| entity_id | INTEGER | FOREIGN KEY, PRIMARY KEY | ID de la entidad |
+| mentions | INTEGER | NOT NULL, DEFAULT 1 | Número de menciones en el artículo |
+| relevance | FLOAT | NOT NULL, DEFAULT 0.0, INDEX | Score de relevancia para este par artículo-entidad |
+
+**Restricciones**:
+- PK compuesta: `(article_id, entity_id)`
+- `article_id` ON DELETE CASCADE
+- `entity_id` ON DELETE CASCADE
+
+**Campos adicionales**:
+- `mentions`: Conteo directo de cuántas veces aparece la entidad en el artículo
+- `relevance`: Score calculado basado en menciones, posición en texto, presencia en título, etc.
+
+**Índices**:
+- `article_id`: Para buscar todas las entidades de un artículo
+- `entity_id`: Para buscar todos los artículos que mencionan una entidad
+- `relevance`: Para ordenar por relevancia
 
 ### Tabla: `article_tags`
 

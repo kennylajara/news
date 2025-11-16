@@ -3,7 +3,7 @@ SQLAlchemy models for news portal.
 """
 
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Text, DateTime, Table, ForeignKey, Index, Enum, JSON
+from sqlalchemy import Column, Integer, String, Text, DateTime, Table, ForeignKey, Index, Enum, JSON, Float
 from sqlalchemy.orm import relationship, declarative_base
 import enum
 
@@ -44,6 +44,19 @@ article_tags = Table(
     Column('tag_id', Integer, ForeignKey('tags.id', ondelete='CASCADE'), primary_key=True),
     Index('idx_article_tags_article', 'article_id'),
     Index('idx_article_tags_tag', 'tag_id')
+)
+
+# Association table for many-to-many relationship between articles and entities
+article_entities = Table(
+    'article_entities',
+    Base.metadata,
+    Column('article_id', Integer, ForeignKey('articles.id', ondelete='CASCADE'), primary_key=True),
+    Column('entity_id', Integer, ForeignKey('named_entities.id', ondelete='CASCADE'), primary_key=True),
+    Column('mentions', Integer, nullable=False, default=1),      # Number of mentions in this article
+    Column('relevance', Float, nullable=False, default=0.0),     # Calculated relevance score for this article-entity pair
+    Index('idx_article_entities_article', 'article_id'),
+    Index('idx_article_entities_entity', 'entity_id'),
+    Index('idx_article_entities_relevance', 'relevance')
 )
 
 
@@ -100,13 +113,14 @@ class Article(Base):
     category = Column(String(255))
     html_path = Column(String(500))
 
-    processed_at = Column(DateTime, nullable=True, index=True)
+    preprocessed_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
 
     # Relationships
     source = relationship('Source', back_populates='articles')
     tags = relationship('Tag', secondary=article_tags, back_populates='articles')
+    entities = relationship('NamedEntity', secondary=article_entities, backref='articles')
 
     # Indexes
     __table_args__ = (
