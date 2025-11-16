@@ -14,14 +14,15 @@ def process():
 
 @process.command()
 @click.option('--domain', '-d', required=True, help='Domain to process')
-@click.option('--type', '-t', 'process_type', type=click.Choice(['enrich_article']), required=True, help='Type of processing')
+@click.option('--type', '-t', 'process_type', type=click.Choice(['enrich_article', 'generate_flash_news']), required=True, help='Type of processing')
 @click.option('--size', '-s', type=int, default=10, help='Batch size (default: 10)')
 def start(domain, process_type, size):
     """
     Create and start a processing batch for articles from a domain.
 
-    Example:
+    Examples:
         news process start -d diariolibre.com -t enrich_article -s 10
+        news process start -d diariolibre.com -t generate_flash_news -s 10
     """
     db = Database()
     session = db.get_session()
@@ -33,24 +34,44 @@ def start(domain, process_type, size):
             click.echo(click.style(f"✗ Domain '{domain}' not found", fg="red"))
             return
 
-        # Map process type string to enum
-        process_type_enum = ProcessType.ENRICH_ARTICLE
+        # Map process type string to enum and select appropriate articles
+        if process_type == 'enrich_article':
+            process_type_enum = ProcessType.ENRICH_ARTICLE
 
-        # Get unenriched articles (enriched_at is NULL), ordered by most recent first
-        unenriched = (
-            session.query(Article)
-            .filter(Article.source_id == source.id)
-            .filter(Article.enriched_at.is_(None))
-            .order_by(Article.created_at.desc())
-            .limit(size)
-            .all()
-        )
+            # Get unenriched articles (enriched_at is NULL)
+            articles_to_process = (
+                session.query(Article)
+                .filter(Article.source_id == source.id)
+                .filter(Article.enriched_at.is_(None))
+                .order_by(Article.created_at.desc())
+                .limit(size)
+                .all()
+            )
+            articles_label = "unenriched articles"
 
-        if not unenriched:
-            click.echo(click.style(f"✗ No unenriched articles found for {domain}", fg="yellow"))
+        elif process_type == 'generate_flash_news':
+            process_type_enum = ProcessType.GENERATE_FLASH_NEWS
+
+            # Get articles with clusters (cluster_enriched_at is NOT NULL)
+            articles_to_process = (
+                session.query(Article)
+                .filter(Article.source_id == source.id)
+                .filter(Article.cluster_enriched_at.isnot(None))
+                .order_by(Article.created_at.desc())
+                .limit(size)
+                .all()
+            )
+            articles_label = "articles with clusters"
+
+        else:
+            click.echo(click.style(f"✗ Unknown process type: {process_type}", fg="red"))
             return
 
-        click.echo(f"Found {len(unenriched)} unenriched articles")
+        if not articles_to_process:
+            click.echo(click.style(f"✗ No {articles_label} found for {domain}", fg="yellow"))
+            return
+
+        click.echo(f"Found {len(articles_to_process)} {articles_label}")
         click.echo(f"Creating batch for {domain}...")
 
         # Create batch and items atomically
@@ -60,7 +81,7 @@ def start(domain, process_type, size):
                 source_id=source.id,
                 process_type=process_type_enum,
                 status='pending',
-                total_items=len(unenriched),
+                total_items=len(articles_to_process),
                 processed_items=0,
                 successful_items=0,
                 failed_items=0
@@ -69,7 +90,7 @@ def start(domain, process_type, size):
             session.flush()
 
             # Create batch items
-            for article in unenriched:
+            for article in articles_to_process:
                 item = BatchItem(
                     batch_id=batch.id,
                     article_id=article.id,
@@ -83,16 +104,23 @@ def start(domain, process_type, size):
             session.rollback()
             raise Exception(f"Failed to create batch atomically: {e}")
 
-        click.echo(click.style(f"✓ Batch created (ID: {batch.id}) with {len(unenriched)} articles", fg="green"))
+        click.echo(click.style(f"✓ Batch created (ID: {batch.id}) with {len(articles_to_process)} articles", fg="green"))
         click.echo(f"\nBatch details:")
         click.echo(f"  Source: {domain}")
         click.echo(f"  Type: {process_type}")
-        click.echo(f"  Articles: {len(unenriched)}")
+        click.echo(f"  Articles: {len(articles_to_process)}")
         click.echo(f"\nNow processing batch...")
 
-        # Process the batch
-        from processors.enrich import process_batch
-        success = process_batch(batch.id, session)
+        # Process the batch with appropriate processor
+        if process_type_enum == ProcessType.ENRICH_ARTICLE:
+            from processors.enrich import process_batch
+            success = process_batch(batch.id, session)
+        elif process_type_enum == ProcessType.GENERATE_FLASH_NEWS:
+            from processors.flash_news import process_flash_news_batch
+            success = process_flash_news_batch(batch.id, session)
+        else:
+            click.echo(click.style(f"✗ No processor found for type: {process_type}", fg="red"))
+            return
 
         if success:
             click.echo(click.style(f"\n✓ Batch processing completed successfully", fg="green"))

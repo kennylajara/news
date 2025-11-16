@@ -13,6 +13,7 @@ Base = declarative_base()
 class ProcessType(enum.Enum):
     """Types of domain processing."""
     ENRICH_ARTICLE = "enrich_article"
+    GENERATE_FLASH_NEWS = "generate_flash_news"
 
 
 class EntityType(enum.Enum):
