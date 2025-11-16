@@ -257,8 +257,13 @@ def process_article(article, batch_item, session):
         # ========== PHASE 2: NER ==========
         logs.append("Phase 2: Extracting named entities...")
 
-        # Extract entities from title and content
-        text = f"{article.title} {article.content}"
+        # Extract entities from title, subtitle, and content
+        # Note: subtitle is included for NER but NOT for clustering
+        text_parts = [article.title]
+        if article.subtitle:
+            text_parts.append(article.subtitle)
+        text_parts.append(article.content)
+        text = " ".join(text_parts)
         entities = extract_entities(text)
 
         stats['entities_found'] = len(entities)

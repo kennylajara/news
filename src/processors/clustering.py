@@ -33,6 +33,7 @@ def extract_sentences(markdown_content):
     """
     Extract sentences from Markdown content.
     Handles Spanish punctuation and Markdown formatting.
+    Excludes markdown headers (subtitles) from clustering.
 
     Args:
         markdown_content: String with Markdown-formatted article content
@@ -41,8 +42,8 @@ def extract_sentences(markdown_content):
         List of sentence strings
     """
     # Remove Markdown formatting
-    # Remove headers
-    text = re.sub(r'^#+\s+', '', markdown_content, flags=re.MULTILINE)
+    # Remove header lines completely (including the text)
+    text = re.sub(r'^#+\s+.*$', '', markdown_content, flags=re.MULTILINE)
     # Remove bold/italic
     text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
     text = re.sub(r'\*([^*]+)\*', r'\1', text)
