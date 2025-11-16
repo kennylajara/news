@@ -29,8 +29,8 @@ Lista artículos de la base de datos.
 - `-l, --limit`: Número de artículos a mostrar (default: 10)
 - `-s, --source`: Filtrar por dominio de fuente
 - `-t, --tag`: Filtrar por tag
-- `--preprocessed`: Mostrar solo artículos preprocesados
-- `--pending-preprocess`: Mostrar solo artículos pendientes de preprocesar
+- `--enriched`: Mostrar solo artículos enriquecidos
+- `--pending-enrich`: Mostrar solo artículos pendientes de enriquecer
 - `--no-pager`: Desactivar paginación
 
 **Ejemplos:**
@@ -39,9 +39,9 @@ uv run news article list
 uv run news article list --limit 20
 uv run news article list --source diariolibre.com
 uv run news article list --tag "política"
-uv run news article list --preprocessed
-uv run news article list --pending-preprocess
-uv run news article list --source diariolibre.com --preprocessed
+uv run news article list --enriched
+uv run news article list --pending-enrich
+uv run news article list --source diariolibre.com --enriched
 ```
 
 ### `news article show <ID>`
@@ -146,12 +146,12 @@ Crea y ejecuta un batch de procesamiento.
 **Opciones:**
 - `-d, --domain`: Dominio a procesar (requerido)
 - `-t, --type`: Tipo de procesamiento (requerido)
-  - `pre_process_articles`: Pre-procesamiento con NER
+  - `enrich_article`: Enriquecimiento con NER
 - `-s, --size`: Tamaño del batch (default: 10)
 
 **Ejemplo:**
 ```bash
-uv run news domain process start -d diariolibre.com -t pre_process_articles -s 10
+uv run news domain process start -d diariolibre.com -t enrich_article -s 10
 ```
 
 ### `news domain process list`
@@ -318,10 +318,10 @@ uv run news article fetch "https://example.com/article1"
 uv run news article fetch "https://example.com/article2"
 
 # 3. Verificar artículos pendientes
-uv run news article list --source example.com --pending-preprocess
+uv run news article list --source example.com --pending-enrich
 
 # 4. Procesar artículos con NER
-uv run news domain process start -d example.com -t pre_process_articles -s 10
+uv run news domain process start -d example.com -t enrich_article -s 10
 
 # 5. Ver progreso del batch
 uv run news domain process list --domain example.com

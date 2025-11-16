@@ -6,7 +6,7 @@ El sistema de procesamiento por lotes permite ejecutar diferentes tipos de proce
 
 ## Tipos de Procesamiento
 
-### Pre-procesamiento de Artículos (`pre_process_articles`)
+### Enriquecimiento de Artículos (`enrich_article`)
 
 Extrae entidades nombradas (NER - Named Entity Recognition) de los artículos usando spaCy.
 
@@ -31,12 +31,12 @@ uv run news domain process start -d <dominio> -t <tipo> -s <tamaño>
 **Parámetros**:
 - `-d, --domain`: Dominio a procesar (requerido)
 - `-t, --type`: Tipo de procesamiento (requerido)
-  - `pre_process_articles`: Pre-procesamiento con NER
+  - `enrich_article`: Enriquecimiento con NER
 - `-s, --size`: Tamaño del batch (default: 10)
 
 **Ejemplo**:
 ```bash
-uv run news domain process start -d diariolibre.com -t pre_process_articles -s 10
+uv run news domain process start -d diariolibre.com -t enrich_article -s 10
 ```
 
 ### Listar Batches
@@ -90,7 +90,7 @@ uv run news domain process show 1
 
 ## Flujo de Procesamiento
 
-1. **Selección de artículos**: Se seleccionan artículos no procesados (`preprocessed_at IS NULL`)
+1. **Selección de artículos**: Se seleccionan artículos no enriquecidos (`enriched_at IS NULL`)
 2. **Creación de batch**: Se crea un registro en `processing_batches`
 3. **Creación de items**: Se crean registros en `batch_items` para cada artículo (transacción atómica)
 4. **Procesamiento**:
@@ -99,7 +99,7 @@ uv run news domain process show 1
      - Se ejecuta NER con spaCy
      - Se crean/actualizan entidades en `named_entities`
      - Se asocian entidades al artículo en `article_entities` con menciones y relevancia
-     - Se marca el artículo como procesado (`preprocessed_at`)
+     - Se marca el artículo como enriquecido (`enriched_at`)
      - Se guardan logs y estadísticas
 5. **Finalización**: Se actualiza el batch con estadísticas finales
 
@@ -245,8 +245,8 @@ La mayoría de consultas comunes están disponibles a través de comandos CLI. V
 - Ver detalles de batch: `uv run news domain process show <batch_id>`
 - Ver logs de item: `uv run news domain process show <batch_id> --item <item_id>`
 - Ver entidades más relevantes: `uv run news entity list`
-- Ver artículos preprocesados: `uv run news article list --preprocessed`
-- Ver artículos pendientes: `uv run news article list --pending-preprocess`
+- Ver artículos enriquecidos: `uv run news article list --enriched`
+- Ver artículos pendientes: `uv run news article list --pending-enrich`
 - Ver entidades de artículo: `uv run news article show <id> --entities`
 - Ver artículos que mencionan entidad: `uv run news entity show "<nombre>"`
 - Ver estadísticas: `uv run news domain stats`

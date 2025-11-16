@@ -104,10 +104,10 @@ def fetch(url):
 @click.option('--limit', '-l', default=10, help='Number of articles to show')
 @click.option('--source', '-s', help='Filter by source domain')
 @click.option('--tag', '-t', help='Filter by tag')
-@click.option('--preprocessed', is_flag=True, help='Show only preprocessed articles')
-@click.option('--pending-preprocess', is_flag=True, help='Show only articles pending preprocessing')
+@click.option('--enriched', is_flag=True, help='Show only enriched articles')
+@click.option('--pending-enrich', is_flag=True, help='Show only articles pending enrichment')
 @click.option('--no-pager', is_flag=True, help='Disable pagination')
-def list(limit, source, tag, preprocessed, pending_preprocess, no_pager):
+def list(limit, source, tag, enriched, pending_enrich, no_pager):
     """
     List articles from database.
 
@@ -116,8 +116,8 @@ def list(limit, source, tag, preprocessed, pending_preprocess, no_pager):
         news article list --limit 20
         news article list --source diariolibre.com
         news article list --tag España
-        news article list --preprocessed
-        news article list --pending-preprocess
+        news article list --enriched
+        news article list --pending-enrich
     """
     db = Database()
     session = db.get_session()
@@ -134,20 +134,20 @@ def list(limit, source, tag, preprocessed, pending_preprocess, no_pager):
         if tag:
             query = query.join(Article.tags).filter(Tag.name == tag)
 
-        if preprocessed:
-            query = query.filter(Article.preprocessed_at.isnot(None))
-        elif pending_preprocess:
-            query = query.filter(Article.preprocessed_at.is_(None))
+        if enriched:
+            query = query.filter(Article.enriched_at.isnot(None))
+        elif pending_enrich:
+            query = query.filter(Article.enriched_at.is_(None))
 
         # Order and limit
         articles = query.order_by(Article.created_at.desc()).limit(limit).all()
 
         # Build header
         header_parts = []
-        if preprocessed:
-            header_parts.append("Preprocessed")
-        elif pending_preprocess:
-            header_parts.append("Pending preprocessing")
+        if enriched:
+            header_parts.append("Enriched")
+        elif pending_enrich:
+            header_parts.append("Pending enrichment")
         if source:
             header_parts.append(f"from {source}")
         if tag:
@@ -166,13 +166,13 @@ def list(limit, source, tag, preprocessed, pending_preprocess, no_pager):
         # Build output
         output_lines = [header]
         for art in articles:
-            preprocess_status = click.style("✓", fg="green") if art.preprocessed_at else click.style("○", fg="yellow")
-            output_lines.append(f"{preprocess_status} [{art.id}] {art.title}")
+            enrich_status = click.style("✓", fg="green") if art.enriched_at else click.style("○", fg="yellow")
+            output_lines.append(f"{enrich_status} [{art.id}] {art.title}")
             output_lines.append(f"    Source: {art.source.domain}")
             output_lines.append(f"    Date: {art.published_date}")
             output_lines.append(f"    Tags: {', '.join([t.name for t in art.tags[:3]])}{'...' if len(art.tags) > 3 else ''}")
-            if art.preprocessed_at:
-                output_lines.append(f"    Preprocessed: {art.preprocessed_at}")
+            if art.enriched_at:
+                output_lines.append(f"    Enriched: {art.enriched_at}")
             output_lines.append("")
 
         output_text = "\n".join(output_lines)
@@ -219,7 +219,7 @@ def show(article_id, full, entities):
         click.echo(f"Source: {art.source.domain}")
         click.echo(f"Category: {art.category or 'N/A'}")
         click.echo(f"Tags: {', '.join([t.name for t in art.tags])}")
-        click.echo(f"Preprocessed: {click.style('Yes', fg='green') if art.preprocessed_at else click.style('No', fg='yellow')} {f'({art.preprocessed_at})' if art.preprocessed_at else ''}")
+        click.echo(f"Enriched: {click.style('Yes', fg='green') if art.enriched_at else click.style('No', fg='yellow')} {f'({art.enriched_at})' if art.enriched_at else ''}")
         click.echo(f"URL: {art.url}")
         click.echo(f"Hash: {art.hash}")
 
@@ -231,8 +231,8 @@ def show(article_id, full, entities):
 
             click.echo(f"\n{click.style('Entities:', bold=True)}")
 
-            if not art.preprocessed_at:
-                click.echo(click.style("  Article has not been preprocessed yet", fg="yellow"))
+            if not art.enriched_at:
+                click.echo(click.style("  Article has not been enriched yet", fg="yellow"))
             else:
                 # Query article_entities association table
                 stmt = select(

@@ -37,7 +37,7 @@ Rastrea la última vez que se ejecutó cada tipo de procesamiento por dominio.
 | updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
 
 **Valores de `process_type`**:
-- `pre_process_articles`: Pre-procesamiento de artículos
+- `enrich_article`: Enriquecimiento de artículos
 
 **Relaciones**:
 - N:1 con `sources` (múltiples procesos pertenecen a un source)
@@ -67,7 +67,7 @@ Artículos de noticias completos con metadata.
 | location | VARCHAR(255) | | Ciudad de origen |
 | category | VARCHAR(255) | | Categoría/Subcategoría |
 | content | TEXT | NOT NULL | Contenido en formato Markdown |
-| preprocessed_at | DATETIME | NULLABLE, INDEX | Fecha de preprocesamiento (NULL = no preprocesado) |
+| enriched_at | DATETIME | NULLABLE, INDEX | Fecha de enriquecimiento (NULL = no enriquecido) |
 | created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Fecha de creación en DB |
 | updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
 

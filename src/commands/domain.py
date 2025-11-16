@@ -180,23 +180,23 @@ def stats():
         click.echo(click.style("\n=== Source Statistics ===\n", fg="cyan", bold=True))
 
         total_articles = 0
-        total_preprocessed = 0
+        total_enriched = 0
         total_pending = 0
 
         for source in sorted(sources, key=lambda s: len(s.articles), reverse=True):
             count = len(source.articles)
-            preprocessed = len([a for a in source.articles if a.preprocessed_at])
-            pending = count - preprocessed
+            enriched = len([a for a in source.articles if a.enriched_at])
+            pending = count - enriched
 
             total_articles += count
-            total_preprocessed += preprocessed
+            total_enriched += enriched
             total_pending += pending
 
-            click.echo(f"{source.domain:30} {count:5} articles ({click.style(str(preprocessed), fg='green')} preprocessed, {click.style(str(pending), fg='yellow')} pending)")
+            click.echo(f"{source.domain:30} {count:5} articles ({click.style(str(enriched), fg='green')} enriched, {click.style(str(pending), fg='yellow')} pending)")
 
         click.echo(f"\n{'Total':30} {total_articles:5} articles")
-        click.echo(f"{'Preprocessed':30} {click.style(str(total_preprocessed), fg='green'):5} articles")
-        click.echo(f"{'Pending preprocessing':30} {click.style(str(total_pending), fg='yellow'):5} articles")
+        click.echo(f"{'Enriched':30} {click.style(str(total_enriched), fg='green'):5} articles")
+        click.echo(f"{'Pending enrichment':30} {click.style(str(total_pending), fg='yellow'):5} articles")
         click.echo(f"{'Sources':30} {len(sources):5}")
 
     finally:
@@ -211,14 +211,14 @@ def process():
 
 @process.command()
 @click.option('--domain', '-d', required=True, help='Domain to process')
-@click.option('--type', '-t', 'process_type', type=click.Choice(['pre_process_articles']), required=True, help='Type of processing')
+@click.option('--type', '-t', 'process_type', type=click.Choice(['enrich_article']), required=True, help='Type of processing')
 @click.option('--size', '-s', type=int, default=10, help='Batch size (default: 10)')
 def start(domain, process_type, size):
     """
     Create and start a processing batch for articles from a domain.
 
     Example:
-        news domain process start -d diariolibre.com -t pre_process_articles -s 10
+        news domain process start -d diariolibre.com -t enrich_article -s 10
     """
     db = Database()
     session = db.get_session()
@@ -231,23 +231,23 @@ def start(domain, process_type, size):
             return
 
         # Map process type string to enum
-        process_type_enum = ProcessType.PRE_PROCESS_ARTICLES
+        process_type_enum = ProcessType.ENRICH_ARTICLE
 
-        # Get unprocessed articles (preprocessed_at is NULL), ordered by most recent first
-        unprocessed = (
+        # Get unenriched articles (enriched_at is NULL), ordered by most recent first
+        unenriched = (
             session.query(Article)
             .filter(Article.source_id == source.id)
-            .filter(Article.preprocessed_at.is_(None))
+            .filter(Article.enriched_at.is_(None))
             .order_by(Article.created_at.desc())
             .limit(size)
             .all()
         )
 
-        if not unprocessed:
-            click.echo(click.style(f"✗ No unprocessed articles found for {domain}", fg="yellow"))
+        if not unenriched:
+            click.echo(click.style(f"✗ No unenriched articles found for {domain}", fg="yellow"))
             return
 
-        click.echo(f"Found {len(unprocessed)} unprocessed articles")
+        click.echo(f"Found {len(unenriched)} unenriched articles")
         click.echo(f"Creating batch for {domain}...")
 
         # Create batch and items atomically
@@ -257,7 +257,7 @@ def start(domain, process_type, size):
                 source_id=source.id,
                 process_type=process_type_enum,
                 status='pending',
-                total_items=len(unprocessed),
+                total_items=len(unenriched),
                 processed_items=0,
                 successful_items=0,
                 failed_items=0
@@ -266,7 +266,7 @@ def start(domain, process_type, size):
             session.flush()
 
             # Create batch items
-            for article in unprocessed:
+            for article in unenriched:
                 item = BatchItem(
                     batch_id=batch.id,
                     article_id=article.id,
@@ -280,15 +280,15 @@ def start(domain, process_type, size):
             session.rollback()
             raise Exception(f"Failed to create batch atomically: {e}")
 
-        click.echo(click.style(f"✓ Batch created (ID: {batch.id}) with {len(unprocessed)} articles", fg="green"))
+        click.echo(click.style(f"✓ Batch created (ID: {batch.id}) with {len(unenriched)} articles", fg="green"))
         click.echo(f"\nBatch details:")
         click.echo(f"  Source: {domain}")
         click.echo(f"  Type: {process_type}")
-        click.echo(f"  Articles: {len(unprocessed)}")
+        click.echo(f"  Articles: {len(unenriched)}")
         click.echo(f"\nNow processing batch...")
 
         # Process the batch
-        from processors.pre_process import process_batch
+        from processors.enrich import process_batch
         success = process_batch(batch.id, session)
 
         if success:

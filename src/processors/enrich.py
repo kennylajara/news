@@ -1,5 +1,5 @@
 """
-Pre-processing module for articles.
+Article enrichment module.
 Includes Named Entity Recognition (NER) using spaCy.
 """
 
@@ -62,9 +62,6 @@ def calculate_entity_relevance(article, entity_text, mentions, total_mentions):
     if total_mentions == 0:
         return 0.0
 
-    # Remove multiple spaces and line brakes
-    article = " ".join(article.text.split())
-
     # Base score: proportion of this entity's mentions vs all entity mentions
     base_score = mentions / total_mentions
 
@@ -72,7 +69,8 @@ def calculate_entity_relevance(article, entity_text, mentions, total_mentions):
     score = base_score
 
     # Apply bonuses as percentages of base score
-    content_lower = article.content.lower()
+    # Remove multiple spaces and line breaks for cleaner matching
+    content_lower = " ".join(article.content.split()).lower()
     entity_lower = entity_text.lower()
 
     # Bonus: +50% if entity appears in title
@@ -228,8 +226,8 @@ def process_article(article, batch_item, session):
 
                 logs.append(f"  {entity_text}: {mention_count} mentions, relevance={normalized_relevance:.4f}")
 
-        # Mark article as preprocessed
-        article.preprocessed_at = datetime.utcnow()
+        # Mark article as enriched
+        article.enriched_at = datetime.utcnow()
 
         # Update batch item
         batch_item.status = 'completed'

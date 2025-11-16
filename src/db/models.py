@@ -12,7 +12,7 @@ Base = declarative_base()
 
 class ProcessType(enum.Enum):
     """Types of domain processing."""
-    PRE_PROCESS_ARTICLES = "pre_process_articles"
+    ENRICH_ARTICLE = "enrich_article"
 
 
 class EntityType(enum.Enum):
@@ -113,7 +113,7 @@ class Article(Base):
     category = Column(String(255))
     html_path = Column(String(500))
 
-    preprocessed_at = Column(DateTime, nullable=True, index=True)
+    enriched_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
 
