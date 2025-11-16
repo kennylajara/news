@@ -49,10 +49,10 @@ def list(limit, entity_type, min_relevance, no_pager):
                 return
 
         if min_relevance:
-            query = query.filter(NamedEntity.relevance >= min_relevance)
+            query = query.filter(NamedEntity.article_count >= min_relevance)
 
-        # Order by relevance and limit
-        entities = query.order_by(NamedEntity.relevance.desc()).limit(limit).all()
+        # Order by article_count and limit
+        entities = query.order_by(NamedEntity.article_count.desc()).limit(limit).all()
 
         # Build header
         header_parts = []
@@ -74,17 +74,11 @@ def list(limit, entity_type, min_relevance, no_pager):
         # Build output
         output_lines = [header]
 
-        # Count articles per entity
+        # Build entity list
         for ent in entities:
-            # Count articles that mention this entity
-            article_count = session.query(func.count(article_entities.c.article_id)).filter(
-                article_entities.c.entity_id == ent.id
-            ).scalar()
-
             output_lines.append(f"[{ent.id}] {ent.name}")
             output_lines.append(f"    Type: {ent.entity_type.value}")
-            output_lines.append(f"    Global relevance: {click.style(str(ent.relevance), fg='green')}")
-            output_lines.append(f"    Mentioned in: {article_count} articles")
+            output_lines.append(f"    Articles: {click.style(str(ent.article_count), fg='green')}")
             if ent.description:
                 output_lines.append(f"    Description: {ent.description[:80]}...")
             output_lines.append("")
@@ -131,7 +125,7 @@ def show(name, limit, no_pager):
         output_lines.append(click.style(f"\n=== {ent.name} ===\n", fg="cyan", bold=True))
         output_lines.append(f"ID: {ent.id}")
         output_lines.append(f"Type: {ent.entity_type.value}")
-        output_lines.append(f"Global relevance: {click.style(str(ent.relevance), fg='green')}")
+        output_lines.append(f"Articles: {click.style(str(ent.article_count), fg='green')}")
         output_lines.append(f"Trend: {ent.trend}")
         if ent.description:
             output_lines.append(f"Description: {ent.description}")
@@ -199,7 +193,7 @@ def search(query, limit, no_pager):
         # Search entities by partial name match (case-insensitive)
         entities = session.query(NamedEntity).filter(
             func.lower(NamedEntity.name).like(f"%{query.lower()}%")
-        ).order_by(NamedEntity.relevance.desc()).limit(limit).all()
+        ).order_by(NamedEntity.article_count.desc()).limit(limit).all()
 
         if not entities:
             click.echo(click.style(f"✗ No entities found matching '{query}'", fg="yellow"))
@@ -209,15 +203,9 @@ def search(query, limit, no_pager):
         output_lines = [f"Entities matching '{query}':\n"]
 
         for ent in entities:
-            # Count articles that mention this entity
-            article_count = session.query(func.count(article_entities.c.article_id)).filter(
-                article_entities.c.entity_id == ent.id
-            ).scalar()
-
             output_lines.append(f"[{ent.id}] {ent.name}")
             output_lines.append(f"    Type: {ent.entity_type.value}")
-            output_lines.append(f"    Global relevance: {click.style(str(ent.relevance), fg='green')}")
-            output_lines.append(f"    Mentioned in: {article_count} articles")
+            output_lines.append(f"    Articles: {click.style(str(ent.article_count), fg='green')}")
             output_lines.append("")
 
         output_text = "\n".join(output_lines)

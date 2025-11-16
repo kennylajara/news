@@ -156,13 +156,13 @@ class NamedEntity(Base):
     entity_type = Column(Enum(EntityType), nullable=False)
     description = Column(Text, nullable=True)
     photo_url = Column(String(500), nullable=True)
-    relevance = Column(Integer, nullable=False, default=0)
+    article_count = Column(Integer, nullable=False, default=0)  # Number of articles that mention this entity
     trend = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
 
     def __repr__(self):
-        return f"<NamedEntity(name='{self.name}', type={self.entity_type.value}, relevance={self.relevance})>"
+        return f"<NamedEntity(name='{self.name}', type={self.entity_type.value}, article_count={self.article_count})>"
 
 
 class ProcessingBatch(Base):

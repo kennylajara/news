@@ -5,7 +5,7 @@ Includes Named Entity Recognition (NER) using spaCy.
 
 import spacy
 from datetime import datetime
-from sqlalchemy import insert
+from sqlalchemy import insert, update
 from db import ProcessingBatch, BatchItem, Article, NamedEntity, EntityType
 from db.models import article_entities
 
@@ -40,6 +40,65 @@ SPACY_TO_ENTITY_TYPE = {
     'ORDINAL': EntityType.ORDINAL,
     'CARDINAL': EntityType.CARDINAL,
 }
+
+
+def calculate_entity_relevance(article, entity_text, mentions, total_mentions):
+    """
+    Calculate relevance score for an entity within a specific article.
+
+    Base score is the proportion of this entity's mentions relative to all entity mentions.
+    Bonuses are applied as percentages of the base score.
+    Final score is in base 1.
+
+    Args:
+        article: Article object
+        entity_text: The text of the entity
+        mentions: Number of times this entity appears in the article
+        total_mentions: Total mentions of all entities in the article
+
+    Returns:
+        float: Calculated relevance score (0.0 to ~2.0+ depending on bonuses)
+    """
+    if total_mentions == 0:
+        return 0.0
+
+    # Remove multiple spaces and line brakes
+    article = " ".join(article.text.split())
+
+    # Base score: proportion of this entity's mentions vs all entity mentions
+    base_score = mentions / total_mentions
+
+    # Start with base score
+    score = base_score
+
+    # Apply bonuses as percentages of base score
+    content_lower = article.content.lower()
+    entity_lower = entity_text.lower()
+
+    # Bonus: +50% if entity appears in title
+    if article.title and entity_lower in article.title.lower():
+        score += base_score * 0.5
+
+    # Bonus: +25% if entity appears in subtitle
+    if article.subtitle and entity_lower in article.subtitle.lower():
+        score += base_score * 0.25
+
+    # Bonus based on position of first occurrence
+    if content_lower:
+        first_occurrence = content_lower.find(entity_lower)
+        if first_occurrence != -1:
+            relative_position = first_occurrence / len(content_lower)
+            if relative_position < 0.2:  # First 20%
+                score += base_score * 0.3  # +30%
+            elif relative_position < 0.4:  # First 40%
+                score += base_score * 0.15  # +15%
+
+    # Bonus: +10% per mention beyond 3 (cap at +50%)
+    if mentions > 3:
+        bonus_mentions = min(mentions - 3, 5)  # Cap at 5 extra mentions
+        score += base_score * (bonus_mentions * 0.1)
+
+    return round(score, 6)  # Keep precision for very small values
 
 
 def extract_entities(text):
@@ -112,7 +171,12 @@ def process_article(article, batch_item, session):
             # Count entity mentions for this article
             entity_counts[entity_text] = entity_counts.get(entity_text, 0) + 1
 
-        # Process unique entities
+        # Calculate total mentions for relevance calculation
+        total_mentions = sum(entity_counts.values())
+
+        # First pass: Calculate raw relevances and create/update entities
+        entity_relevances = []  # List of (entity_text, entity_id, mention_count, raw_relevance)
+
         for entity_text, mention_count in entity_counts.items():
             # Find entity type from original entities list
             entity_type = next((et for et, _ in [(e[1], e[0]) for e in entities if e[0] == entity_text]), None)
@@ -125,7 +189,7 @@ def process_article(article, batch_item, session):
                 entity = NamedEntity(
                     name=entity_text,
                     entity_type=entity_type,
-                    relevance=1,  # Initial global relevance
+                    article_count=1,  # First article mentioning this entity
                     trend=0
                 )
                 session.add(entity)
@@ -133,23 +197,36 @@ def process_article(article, batch_item, session):
                 stats['entities_new'] += 1
                 logs.append(f"Created new entity: {entity_text} ({entity_type.value})")
             else:
-                # Update global relevance (increment for each article that mentions it)
-                entity.relevance += 1
+                # Update article count (increment for each article that mentions it)
+                entity.article_count += 1
                 stats['entities_existing'] += 1
 
-            # Calculate relevance score for this specific article-entity pair
-            # Simple formula: base on number of mentions
-            # TODO: Enhance with position in text, presence in title, etc.
-            article_entity_relevance = float(mention_count)
+            # Calculate raw relevance for this entity in this article
+            raw_relevance = calculate_entity_relevance(article, entity_text, mention_count, total_mentions)
+            entity_relevances.append((entity_text, entity.id, mention_count, raw_relevance))
 
-            # Insert into article_entities association table
-            stmt = insert(article_entities).values(
-                article_id=article.id,
-                entity_id=entity.id,
-                mentions=mention_count,
-                relevance=article_entity_relevance
-            )
-            session.execute(stmt)
+        # Normalize relevances so the most relevant entity has a score of 1.0
+        if entity_relevances:
+            max_relevance = max(rel for _, _, _, rel in entity_relevances)
+            if max_relevance > 0:
+                normalization_factor = 1.0 / max_relevance
+            else:
+                normalization_factor = 1.0  # All relevances are 0, no normalization needed
+
+            # Second pass: Insert with normalized relevances
+            for entity_text, entity_id, mention_count, raw_relevance in entity_relevances:
+                normalized_relevance = raw_relevance * normalization_factor
+
+                # Insert into article_entities association table
+                stmt = insert(article_entities).values(
+                    article_id=article.id,
+                    entity_id=entity_id,
+                    mentions=mention_count,
+                    relevance=normalized_relevance
+                )
+                session.execute(stmt)
+
+                logs.append(f"  {entity_text}: {mention_count} mentions, relevance={normalized_relevance:.4f}")
 
         # Mark article as preprocessed
         article.preprocessed_at = datetime.utcnow()

@@ -113,7 +113,7 @@ Entidades nombradas extraídas de artículos mediante NER (Named Entity Recognit
 | entity_type | ENUM | NOT NULL | Tipo de entidad |
 | description | TEXT | NULLABLE | Descripción de la entidad |
 | photo_url | VARCHAR(500) | NULLABLE | URL de la foto de la entidad |
-| relevance | INTEGER | NOT NULL, DEFAULT 0 | Score de relevancia (0-100) |
+| article_count | INTEGER | NOT NULL, DEFAULT 0 | Número de artículos que mencionan esta entidad |
 | trend | INTEGER | NOT NULL, DEFAULT 0 | Score de tendencia (-100 a 100) |
 | created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Fecha de creación |
 | updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
@@ -138,9 +138,9 @@ Entidades nombradas extraídas de artículos mediante NER (Named Entity Recognit
 - `ordinal`: "primero", "segundo", etc.
 - `cardinal`: Numerales que no caen en otro tipo
 
-**Uso futuro**:
-- Esta tabla será utilizada para extraer y vincular entidades nombradas (personas, organizaciones, lugares, etc.) de los artículos
-- Los scores de relevancia y tendencia se calcularán basados en menciones y frecuencia
+**Campos clave**:
+- `article_count`: Se incrementa automáticamente cada vez que se procesa un artículo que menciona esta entidad
+- `trend`: Reservado para uso futuro (cálculo de tendencias temporales)
 
 ### Tabla: `processing_batches`
 
@@ -248,7 +248,15 @@ Tabla de asociación para la relación muchos-a-muchos entre artículos y entida
 
 **Campos adicionales**:
 - `mentions`: Conteo directo de cuántas veces aparece la entidad en el artículo
-- `relevance`: Score calculado basado en menciones, posición en texto, presencia en título, etc.
+- `relevance`: Score calculado (FLOAT, 0.0 a 1.0) que considera:
+  - **Base score**: Proporción de menciones de esta entidad vs total de menciones en el artículo
+  - **Bonos** (sumados como % del base_score):
+    - +50% si aparece en el título
+    - +25% si aparece en el subtítulo
+    - +30% si aparece en el primer 20% del contenido
+    - +15% si aparece en el primer 40% del contenido
+    - +10% por cada mención adicional más allá de 3 (cap en +50%)
+  - **Normalización**: El score se normaliza para que la entidad más relevante del artículo tenga 1.0
 
 **Índices**:
 - `article_id`: Para buscar todas las entidades de un artículo

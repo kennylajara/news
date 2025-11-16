@@ -13,8 +13,9 @@ Extrae entidades nombradas (NER - Named Entity Recognition) de los artículos us
 **Características**:
 - Modelo: `es_core_news_sm` (español)
 - Extrae 18 tipos de entidades (personas, organizaciones, lugares, etc.)
-- Asocia entidades a artículos
-- Calcula relevancia basada en menciones
+- Asocia entidades a artículos con conteo de menciones
+- **Calcula relevancia local** (ver sección "Cálculo de Relevancia")
+- Actualiza contador global de artículos por entidad
 - Guarda logs detallados del procesamiento
 
 ## Comandos CLI
@@ -151,36 +152,87 @@ Las entidades se clasifican en 18 tipos según las etiquetas de spaCy:
 - `error_message`: Mensaje de error si falló
 - `started_at`, `completed_at`: Timestamps
 
-## Relevancia de Entidades
+## Métricas de Entidades
 
-El sistema maneja dos tipos de relevancia:
+El sistema maneja dos niveles de métricas:
 
-### Relevancia Global (`named_entities.relevance`)
+### Contador Global de Artículos (`named_entities.article_count`)
 
-Campo INTEGER que se incrementa cada vez que una entidad aparece en cualquier artículo:
-- Primera aparición: `relevance = 1`
-- Segunda aparición (en otro artículo): `relevance = 2`
+Campo INTEGER que cuenta en cuántos artículos aparece la entidad:
+- Primera vez que se menciona (en cualquier artículo): `article_count = 1`
+- Segunda vez (en otro artículo): `article_count = 2`
 - Y así sucesivamente
 
-Esto permite identificar las entidades más relevantes del corpus completo.
+Esto permite identificar las entidades más frecuentes del corpus completo.
 
-### Relevancia por Artículo (`article_entities.relevance`)
+### Menciones por Artículo (`article_entities.mentions`)
 
-Campo FLOAT que representa la relevancia de una entidad dentro de un artículo específico.
-
-Actualmente se calcula como el número de menciones, pero puede mejorarse considerando:
-- Posición en el texto
-- Presencia en título
-- Presencia en subtítulo
-- Contexto semántico
-
-### Menciones (`article_entities.mentions`)
-
-Campo INTEGER que cuenta cuántas veces aparece la entidad en el artículo específico.
+Campo INTEGER que cuenta cuántas veces aparece la entidad en un artículo específico.
 
 **Ejemplo**:
-- Artículo menciona "Policía" 3 veces → `mentions = 3`, `relevance = 3.0`
-- La entidad "Policía" ha aparecido en 5 artículos → `named_entities.relevance = 5`
+- "Policía" aparece 3 veces en artículo A → `mentions = 3`
+- "Policía" aparece 2 veces en artículo B → `mentions = 2`
+- Resultado: `article_count = 2` (2 artículos)
+
+## Cálculo de Relevancia
+
+La relevancia (`article_entities.relevance`) es un score FLOAT que indica la importancia de una entidad dentro de un artículo específico.
+
+### Fórmula
+
+**Base Score** (en base 1):
+```
+base_score = menciones_de_esta_entidad / total_menciones_de_todas_las_entidades
+```
+
+**Ejemplo**:
+- Artículo menciona: Alice (2), Bob (1), Charlie (1)
+- Total menciones = 4
+- Alice base_score = 2/4 = 0.5
+- Bob base_score = 1/4 = 0.25
+- Charlie base_score = 1/4 = 0.25
+
+**Bonos** (sumados como porcentajes del base_score):
+
+| Condición | Bono | Fórmula |
+|-----------|------|---------|
+| Aparece en título | +50% del base_score | `score += base_score * 0.5` |
+| Aparece en subtítulo | +25% del base_score | `score += base_score * 0.25` |
+| Primera mención en primer 20% del contenido | +30% del base_score | `score += base_score * 0.3` |
+| Primera mención en primer 40% del contenido | +15% del base_score | `score += base_score * 0.15` |
+| Más de 3 menciones | +10% del base_score por mención extra (cap +50%) | `score += base_score * (min(menciones-3, 5) * 0.1)` |
+
+**Normalización**:
+Después de calcular todos los scores, se normalizan para que la entidad más relevante del artículo tenga un score de 1.0:
+```
+normalization_factor = 1.0 / max_relevance
+normalized_score = raw_score * normalization_factor
+```
+
+**Ejemplo completo**:
+```
+Artículo con: Alice (2 menciones), Bob (1), Charlie (1)
+Total menciones = 4
+
+Alice:
+- base_score = 2/4 = 0.5
+- Aparece en título → 0.5 + (0.5 * 0.5) = 0.75
+- Primera mención en primer 20% → 0.75 + (0.5 * 0.3) = 0.9
+- raw_score = 0.9
+
+Bob:
+- base_score = 1/4 = 0.25
+- raw_score = 0.25
+
+Charlie:
+- base_score = 1/4 = 0.25
+- raw_score = 0.25
+
+Normalización (max = 0.9):
+- Alice: 0.9 * (1.0/0.9) = 1.0
+- Bob: 0.25 * (1.0/0.9) = 0.278
+- Charlie: 0.25 * (1.0/0.9) = 0.278
+```
 
 ## Acceso a Información
 
