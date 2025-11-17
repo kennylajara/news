@@ -195,13 +195,25 @@ uv run news entity search "Luis"
 
 ## Fuentes Soportadas
 
-- ✓ diariolibre.com
+- [x] diariolibre.com
+- [ ] listindiario.com
+- [ ] hoy.com.do 
+- [ ] elcaribe.com.do
+- [ ] elnacional.com.do
+- [ ] eldia.com.do
+- [ ] elnuevodiario.com.do
+- [ ] eldinero.com.do
 
 ## Roadmap
 
-- [ ] Agregar más extractores (periódicos dominicanos e internacionales)
-- [ ] Sistema de resúmenes automáticos
-- [ ] API REST para consulta de artículos
-- [ ] Frontend para visualización
-- [ ] Sistema de publicación automática
-- [ ] Descarga asíncrona con aiohttp
+- Cache DB (cache de artículos conocidos, util para re-indexación)
+- API REST para consulta de artículos
+- Frontend para visualización
+- Sistema de publicación automática
+- Descarga asíncrona con aiohttp
+- Auto-agregar punto final
+- Validar calidad de la información extraída (validar el JSON tras extracción)
+- Entidades canónicas (unir 2 entidades) 
+- Desambiguación de entidades (una entidad puede referenciar a más de 2)
+- Relevancia por categoria
+- Reconocer monedas como un tipo de entidad (dólar, los dólares canadiense, peso, peso dominicano), diferenciarlo de MONEY (100 dólares, un peso, 100 pesos dominicanos)

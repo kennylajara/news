@@ -168,6 +168,11 @@ class NamedEntity(Base):
     description = Column(Text, nullable=True)
     photo_url = Column(String(500), nullable=True)
     article_count = Column(Integer, nullable=False, default=0)  # Number of articles that mention this entity
+    avg_local_relevance = Column(Float, nullable=True, default=0.0)  # Average local relevance across articles
+    diversity = Column(Integer, nullable=False, default=0)  # Number of unique entities co-occurring with
+    pagerank = Column(Float, nullable=True, default=0.0)  # Raw PageRank score (unnormalized)
+    global_relevance = Column(Float, nullable=True, default=0.0, index=True)  # Normalized PageRank (0.0-1.0, min-max scaled)
+    last_rank_calculated_at = Column(DateTime, nullable=True, index=True)  # Last time global rank was calculated
     trend = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)

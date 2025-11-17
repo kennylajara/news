@@ -6,6 +6,7 @@ import click
 from db import Database, NamedEntity, Article, EntityType
 from db.models import article_entities
 from sqlalchemy import select, func
+from domain.calculate_global_relevance import calculate_global_relevance
 
 
 @click.group()
@@ -17,9 +18,10 @@ def entity():
 @entity.command()
 @click.option('--limit', '-l', type=int, default=20, help='Number of entities to show (default: 20)')
 @click.option('--type', '-t', 'entity_type', help='Filter by entity type')
-@click.option('--min-relevance', '-r', type=int, help='Minimum global relevance score')
+@click.option('--min-articles', '-a', type=int, help='Minimum number of articles')
+@click.option('--order-by', '-o', type=click.Choice(['articles', 'global_rank'], case_sensitive=False), default='articles', help='Order by articles or global_rank')
 @click.option('--no-pager', is_flag=True, help='Disable pagination')
-def list(limit, entity_type, min_relevance, no_pager):
+def list(limit, entity_type, min_articles, order_by, no_pager):
     """
     List named entities with filters.
 
@@ -27,8 +29,9 @@ def list(limit, entity_type, min_relevance, no_pager):
         news entity list
         news entity list --limit 50
         news entity list --type person
-        news entity list --min-relevance 5
-        news entity list --type org --min-relevance 10
+        news entity list --min-articles 5
+        news entity list --order-by global_rank
+        news entity list --type org --min-articles 10 --order-by global_rank
     """
     db = Database()
     session = db.get_session()
@@ -48,23 +51,29 @@ def list(limit, entity_type, min_relevance, no_pager):
                 click.echo(click.style(f"✗ Invalid entity type. Valid types: {valid_types}", fg="red"))
                 return
 
-        if min_relevance:
-            query = query.filter(NamedEntity.article_count >= min_relevance)
+        if min_articles:
+            query = query.filter(NamedEntity.article_count >= min_articles)
 
-        # Order by article_count and limit
-        entities = query.order_by(NamedEntity.article_count.desc()).limit(limit).all()
+        # Order by specified field
+        if order_by == 'global_rank':
+            query = query.order_by(NamedEntity.global_relevance.desc().nullslast())
+        else:
+            query = query.order_by(NamedEntity.article_count.desc())
+
+        entities = query.limit(limit).all()
 
         # Build header
         header_parts = []
         if entity_type:
             header_parts.append(f"Type: {entity_type}")
-        if min_relevance:
-            header_parts.append(f"Min relevance: {min_relevance}")
+        if min_articles:
+            header_parts.append(f"Min articles: {min_articles}")
+        header_parts.append(f"Order: {order_by}")
 
-        if header_parts:
+        if len(header_parts) > 1:
             header = f"Entities ({', '.join(header_parts)}):\n"
         else:
-            header = f"Top entities by relevance:\n"
+            header = f"Top entities by {order_by}:\n"
 
         if not entities:
             click.echo(header)
@@ -79,6 +88,12 @@ def list(limit, entity_type, min_relevance, no_pager):
             output_lines.append(f"[{ent.id}] {ent.name}")
             output_lines.append(f"    Type: {ent.entity_type.value}")
             output_lines.append(f"    Articles: {click.style(str(ent.article_count), fg='green')}")
+            if ent.global_relevance is not None and ent.global_relevance > 0:
+                output_lines.append(f"    Global Rank: {click.style(f'{ent.global_relevance:.6f}', fg='cyan')}")
+            if ent.avg_local_relevance is not None and ent.avg_local_relevance > 0:
+                output_lines.append(f"    Avg Local Relevance: {ent.avg_local_relevance:.3f}")
+            if ent.diversity > 0:
+                output_lines.append(f"    Diversity: {ent.diversity} entities")
             if ent.description:
                 output_lines.append(f"    Description: {ent.description[:80]}...")
             output_lines.append("")
@@ -120,17 +135,46 @@ def show(name, limit, no_pager):
             click.echo(click.style(f"✗ Entity '{name}' not found", fg="red"))
             return
 
+        # Calculate ranking position if global_relevance exists
+        rank_position = None
+        total_ranked = None
+        if ent.global_relevance is not None and ent.global_relevance > 0:
+            # Count entities with higher or equal global_relevance
+            total_ranked = session.query(NamedEntity).filter(
+                NamedEntity.global_relevance.isnot(None),
+                NamedEntity.global_relevance > 0
+            ).count()
+
+            rank_position = session.query(NamedEntity).filter(
+                NamedEntity.global_relevance > ent.global_relevance
+            ).count() + 1
+
         # Build output
         output_lines = []
         output_lines.append(click.style(f"\n=== {ent.name} ===\n", fg="cyan", bold=True))
         output_lines.append(f"ID: {ent.id}")
         output_lines.append(f"Type: {ent.entity_type.value}")
         output_lines.append(f"Articles: {click.style(str(ent.article_count), fg='green')}")
+
+        if ent.global_relevance is not None and ent.global_relevance > 0:
+            output_lines.append(f"Global Rank: {click.style(f'{ent.global_relevance:.6f}', fg='cyan')} (#{rank_position} of {total_ranked})")
+
+        if ent.avg_local_relevance is not None and ent.avg_local_relevance > 0:
+            output_lines.append(f"Avg Local Relevance: {ent.avg_local_relevance:.3f}")
+
+        if ent.diversity > 0:
+            output_lines.append(f"Diversity: {ent.diversity} co-occurring entities")
+
+        if ent.last_rank_calculated_at:
+            output_lines.append(f"Last Ranked: {ent.last_rank_calculated_at}")
+
         output_lines.append(f"Trend: {ent.trend}")
+
         if ent.description:
             output_lines.append(f"Description: {ent.description}")
         if ent.photo_url:
             output_lines.append(f"Photo: {ent.photo_url}")
+
         output_lines.append(f"Created: {ent.created_at}")
         output_lines.append(f"Updated: {ent.updated_at}")
 
@@ -215,6 +259,152 @@ def search(query, limit, no_pager):
             click.echo_via_pager(output_text)
         else:
             click.echo(output_text)
+
+    finally:
+        session.close()
+
+
+@entity.command()
+@click.option('--domain', '-d', help='Filter articles by domain (for testing)')
+@click.option('--damping', type=float, default=0.85, help='PageRank damping factor (default: 0.85)')
+@click.option('--threshold', '-t', type=float, default=0.3, help='Min relevance threshold (default: 0.3)')
+@click.option('--time-decay', type=int, help='Time decay in days (optional)')
+@click.option('--show-stats', is_flag=True, help='Show detailed statistics')
+def rerank(domain, damping, threshold, time_decay, show_stats):
+    """
+    Calculate global relevance for all entities using PageRank.
+
+    This command analyzes co-occurrences of entities across articles
+    and calculates a global importance score based on the network
+    of relationships between entities.
+
+    Examples:
+        news entity rerank
+        news entity rerank --domain diariolibre.com
+        news entity rerank --damping 0.9 --threshold 0.4
+        news entity rerank --time-decay 30 --show-stats
+    """
+    db = Database()
+    session = db.get_session()
+
+    try:
+        click.echo(click.style("🔄 Calculating global entity relevance...\n", fg="cyan", bold=True))
+
+        # Step 1: Count total articles and entities
+        total_articles_query = session.query(Article).filter(Article.enriched_at.isnot(None))
+        if domain:
+            from db.models import Source
+            total_articles_query = total_articles_query.join(Article.source).filter(Source.domain == domain)
+
+        total_articles_count = total_articles_query.count()
+
+        if total_articles_count == 0:
+            click.echo(click.style("✗ No enriched articles found", fg="red"))
+            if domain:
+                click.echo(f"  (filtered by domain: {domain})")
+            return
+
+        # Count entities that will be ranked
+        from domain.entity_rank import EntityRankCalculator
+        ranked_types = EntityRankCalculator.RANKED_TYPES
+        total_entities = session.query(NamedEntity).filter(
+            NamedEntity.entity_type.in_(ranked_types)
+        ).count()
+
+        click.echo(f"📊 {click.style('Loading data:', bold=True)}")
+        click.echo(f"   • {click.style(str(total_articles_count), fg='green')} enriched articles")
+        click.echo(f"   • {click.style(str(total_entities), fg='green')} entities to rank")
+
+        if domain:
+            click.echo(f"   • Filtered by domain: {click.style(domain, fg='yellow')}")
+
+        click.echo()
+
+        # Step 2: Calculate global relevance
+        click.echo(f"⚙️  {click.style('Executing PageRank...', bold=True)}")
+        click.echo(f"   • Damping: {damping}")
+        click.echo(f"   • Threshold: {threshold}")
+        if time_decay:
+            click.echo(f"   • Time decay: {time_decay} days")
+
+        click.echo()
+
+        stats = calculate_global_relevance(
+            db=db,
+            session=session,
+            source_domain=domain,
+            damping=damping,
+            min_relevance_threshold=threshold,
+            time_decay_days=time_decay
+        )
+
+        # Step 3: Display results
+        click.echo(click.style("✅ Global relevance calculated successfully!\n", fg="green", bold=True))
+
+        iterations_str = click.style(str(stats['iterations']), fg='cyan')
+        time_str = click.style(f"{stats['convergence_time']:.2f}s", fg='cyan')
+        entities_str = click.style(str(stats['total_entities']), fg='green')
+
+        click.echo(f"   • Converged in {iterations_str} iterations")
+        click.echo(f"   • Processing time: {time_str}")
+        click.echo(f"   • Entities ranked: {entities_str}")
+        click.echo()
+
+        # Show top 10 entities
+        click.echo(click.style("🏆 Top 10 entities by global relevance:\n", bold=True))
+
+        for i, entity_data in enumerate(stats['top_entities'], 1):
+            name = entity_data['name']
+            score = entity_data['score']
+            name_styled = click.style(name, fg='cyan')
+            score_styled = click.style(f'{score:.6f}', fg='green')
+            click.echo(f"   {i:2d}. {name_styled} - {score_styled}")
+
+        click.echo()
+
+        # Show detailed stats if requested
+        if show_stats:
+            click.echo(click.style("📈 Detailed Statistics:\n", bold=True))
+
+            # Get distribution stats
+            all_entities = session.query(NamedEntity).filter(
+                NamedEntity.global_relevance.isnot(None),
+                NamedEntity.global_relevance > 0
+            ).all()
+
+            if all_entities:
+                scores = [e.global_relevance for e in all_entities]
+                import numpy as np
+
+                click.echo(f"   • Mean: {np.mean(scores):.6f}")
+                click.echo(f"   • Median: {np.median(scores):.6f}")
+                click.echo(f"   • Std Dev: {np.std(scores):.6f}")
+                click.echo(f"   • Min: {np.min(scores):.6f}")
+                click.echo(f"   • Max: {np.max(scores):.6f}")
+                click.echo()
+
+                # Distribution by entity type
+                click.echo("   Distribution by type:")
+                type_counts = {}
+                for e in all_entities:
+                    type_name = e.entity_type.value
+                    if type_name not in type_counts:
+                        type_counts[type_name] = 0
+                    type_counts[type_name] += 1
+
+                for etype, count in sorted(type_counts.items(), key=lambda x: x[1], reverse=True):
+                    click.echo(f"     - {etype}: {count}")
+                click.echo()
+
+        click.echo(click.style("💾 Updated database", fg="green"))
+        click.echo()
+        click.echo("💡 View ranked entities with:")
+        click.echo("   news entity list --order-by global_rank")
+
+    except Exception as e:
+        click.echo(click.style(f"✗ Error calculating global relevance: {str(e)}", fg="red"))
+        import traceback
+        traceback.print_exc()
 
     finally:
         session.close()

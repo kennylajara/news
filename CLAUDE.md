@@ -151,6 +151,10 @@ uv run news process start -d diariolibre.com -t generate_flash_news -s 10
 # Ver flash news generados
 uv run news flash list
 
+# Calcular relevancia global de entidades (PageRank)
+uv run news entity rerank
+uv run news entity list --order-by global_rank --limit 20
+
 # Acceso directo a base de datos
 sqlite3 data/news.db
 ```

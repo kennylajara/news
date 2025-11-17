@@ -115,6 +115,11 @@ Entidades nombradas extraídas de artículos mediante NER (Named Entity Recognit
 | description | TEXT | NULLABLE | Descripción de la entidad |
 | photo_url | VARCHAR(500) | NULLABLE | URL de la foto de la entidad |
 | article_count | INTEGER | NOT NULL, DEFAULT 0 | Número de artículos que mencionan esta entidad |
+| avg_local_relevance | FLOAT | NULLABLE, DEFAULT 0.0 | Promedio de relevancia local en artículos |
+| diversity | INTEGER | NOT NULL, DEFAULT 0 | Número de entidades únicas con las que co-ocurre |
+| pagerank | FLOAT | NULLABLE, DEFAULT 0.0 | Score PageRank raw (sin normalizar) |
+| global_relevance | FLOAT | NULLABLE, DEFAULT 0.0, INDEX | PageRank normalizado (0.0-1.0, min-max scaled) |
+| last_rank_calculated_at | DATETIME | NULLABLE, INDEX | Última vez que se calculó ranking global |
 | trend | INTEGER | NOT NULL, DEFAULT 0 | Score de tendencia (-100 a 100) |
 | created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Fecha de creación |
 | updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
@@ -140,7 +145,22 @@ Entidades nombradas extraídas de artículos mediante NER (Named Entity Recognit
 - `cardinal`: Numerales que no caen en otro tipo
 
 **Campos clave**:
-- `article_count`: Se incrementa automáticamente cada vez que se procesa un artículo que menciona esta entidad
+- `article_count`: Número de artículos que mencionan esta entidad (actualizado durante reranking)
+- `avg_local_relevance`: Promedio de relevancia local en todos los artículos donde aparece
+- `diversity`: Número de entidades únicas con las que co-ocurre (mide conectividad en el grafo)
+- `pagerank`: Score de PageRank sin normalizar
+  - Distribución de probabilidad (suma total ≈ 1.0)
+  - Usado para warm start en futuros cálculos
+- `global_relevance`: Score de PageRank normalizado con min-max scaling (0.0-1.0)
+  - Entidad con mayor PageRank = 1.0
+  - Entidad con menor PageRank = 0.0
+  - Resto escala proporcionalmente
+  - Human-friendly y útil para cálculos avanzados
+  - Solo para tipos: PERSON, ORG, FAC, GPE, LOC, EVENT, WORK_OF_ART, LAW, LANGUAGE, DATE
+  - Otros tipos tienen 0.0
+- `last_rank_calculated_at`: Timestamp del inicio del último cálculo de ranking
+  - Usado para warm start: entidades existentes conservan su score `pagerank` anterior
+  - Nuevas entidades se inicializan en el midpoint (promedio entre max y min) para convergencia más rápida
 - `trend`: Reservado para uso futuro (cálculo de tendencias temporales)
 
 ### Tabla: `processing_batches`

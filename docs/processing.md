@@ -529,3 +529,244 @@ result = openai_structured_output('nombre_de_tarea', data)
 print(result.campo1)
 ```
 
+---
+
+## Relevancia Global de Entidades (PageRank)
+
+### Concepto
+
+El sistema calcula la importancia global de entidades usando el algoritmo **PageRank** aplicado a un grafo de co-ocurrencias. La intuición es que entidades mencionadas juntas en artículos forman una red de relaciones, donde:
+
+- **Nodos**: Entidades (personas, organizaciones, lugares, etc.)
+- **Aristas dirigidas ponderadas**: Co-ocurrencia en artículos
+  - Peso del enlace B → A = `relevance_local(A)` en ese artículo
+  - Esto significa que "enlazas más fuerte" a las figuras centrales de cada artículo
+
+**Ejemplo**: Si "Luis Abinader" (relevancia 1.0) y "Ministerio de Salud" (relevancia 0.76) aparecen en el mismo artículo:
+- Ministerio → Abinader: peso 1.0 (Abinader es más central)
+- Abinader → Ministerio: peso 0.76 (Ministerio es secundario)
+
+### Tipos de Entidades Rankeadas
+
+El cálculo de PageRank se aplica **solo** a los siguientes tipos de entidades:
+
+- `PERSON`: Personas
+- `ORG`: Organizaciones, instituciones
+- `FAC`: Edificios, infraestructura
+- `GPE`: Lugares geopolíticos (países, ciudades)
+- `LOC`: Ubicaciones geográficas
+- `EVENT`: Eventos nombrados
+- `WORK_OF_ART`: Obras de arte
+- `LAW`: Leyes y documentos legales
+- `LANGUAGE`: Idiomas
+- `DATE`: Fechas
+
+Los demás tipos (MONEY, PERCENT, QUANTITY, etc.) mantienen `global_relevance = 0.0`.
+
+### Algoritmo
+
+**PageRank Iterativo**:
+```
+1. Inicialización:
+   - Si existe ranking previo: usar scores `pagerank` anteriores (warm start)
+   - Nuevas entidades: inicializar en midpoint = (max + min) / 2 (convergencia más rápida)
+   - Normalizar vector inicial
+
+2. Iteración (hasta convergencia o max 100 iteraciones):
+   PR_new(i) = (1-d)/N + d * Σ(PR(j) * w(j→i) / Σw(j→k))
+
+   Donde:
+   - d = damping factor (0.85 por defecto)
+   - N = número total de entidades
+   - w(j→i) = peso del enlace de j a i
+
+3. Normalizar: Σ PR(i) = 1.0
+
+4. Verificar convergencia: |PR_new - PR| < 1e-6
+
+5. Post-procesamiento:
+   - Guardar resultado raw como `pagerank`
+   - Normalizar con min-max scaling → `global_relevance` (0.0-1.0)
+```
+
+**Dos Métricas de Ranking**:
+- **`pagerank`**: Score raw (distribución de probabilidad, suma ≈ 1.0)
+  - Usado para warm start en futuros cálculos
+  - Preserva la distribución original del algoritmo
+- **`global_relevance`**: Score normalizado con min-max scaling (0.0-1.0)
+  - Entidad más importante = 1.0
+  - Entidad menos importante = 0.0
+  - Human-friendly, fácil de interpretar
+  - Útil para cálculos avanzados y comparaciones
+
+**Manejo de Dangling Nodes**:
+- Entidades sin enlaces salientes distribuyen su probabilidad uniformemente
+
+**Ajustes del Algoritmo**:
+- **Threshold de relevancia**: Ignorar co-ocurrencias débiles (default: 0.3)
+- **Normalización por documento**: Siempre activa (divide peso por # entidades/artículo)
+- **Time decay**: Dar menos peso a artículos antiguos (exponencial, opcional)
+
+### Métricas Calculadas
+
+Se calculan y almacenan las siguientes métricas en `named_entities`:
+
+- **pagerank**: Score PageRank raw (suma ≈ 1.0 entre todas las entidades)
+- **global_relevance**: PageRank normalizado 0.0-1.0 (min-max scaled)
+- **article_count**: Número de artículos donde aparece
+- **avg_local_relevance**: Promedio de relevancia local
+- **diversity**: Número de entidades únicas con las que co-ocurre
+
+### Comando CLI
+
+```bash
+uv run news entity rerank [OPTIONS]
+```
+
+**Opciones**:
+- `--domain TEXT`: Filtrar artículos por dominio (testing)
+- `--damping FLOAT`: Factor de amortiguación (default: 0.85)
+- `--threshold FLOAT`: Umbral mínimo de relevancia (default: 0.3)
+- `--time-decay INT`: Decay temporal en días (opcional)
+- `--show-stats`: Mostrar estadísticas detalladas
+
+**Ejemplos**:
+```bash
+# Calcular ranking global para todas las entidades
+uv run news entity rerank
+
+# Solo artículos de un dominio (testing)
+uv run news entity rerank --domain diariolibre.com
+
+# Ajustar parámetros del algoritmo
+uv run news entity rerank --damping 0.9 --threshold 0.4
+
+# Con decay temporal y estadísticas
+uv run news entity rerank --time-decay 30 --show-stats
+```
+
+**Output esperado**:
+```
+🔄 Calculating global entity relevance...
+
+📊 Loading data:
+   • 1,234 enriched articles
+   • 567 entities to rank
+
+⚙️  Executing PageRank...
+   • Damping: 0.85
+   • Threshold: 0.3
+
+✅ Global relevance calculated successfully!
+
+   • Converged in 23 iterations
+   • Processing time: 2.45s
+   • Entities ranked: 567
+
+🏆 Top 10 entities by global relevance:
+
+    1. Luis Abinader - 0.084723
+    2. Joe Biden - 0.062384
+    3. Ministerio de Salud - 0.051234
+    ...
+
+💾 Updated database
+
+💡 View ranked entities with:
+   news entity list --order-by global_rank
+```
+
+### Ver Resultados
+
+**Listar por ranking global**:
+```bash
+uv run news entity list --order-by global_rank --limit 20
+```
+
+**Ver detalles de entidad**:
+```bash
+uv run news entity show "Luis Abinader"
+```
+
+Output incluye:
+- Global Rank: `0.084723 (#1 of 567)`
+- Avg Local Relevance: `0.856`
+- Diversity: `123 co-occurring entities`
+
+### Consultas SQL
+
+**Top entidades por PageRank**:
+```sql
+SELECT
+    name,
+    entity_type,
+    pagerank,
+    global_relevance,
+    article_count,
+    avg_local_relevance,
+    diversity
+FROM named_entities
+WHERE global_relevance > 0
+ORDER BY global_relevance DESC
+LIMIT 20;
+```
+
+**Distribución de scores**:
+```sql
+SELECT
+    entity_type,
+    COUNT(*) as total,
+    AVG(global_relevance) as avg_rank,
+    MAX(global_relevance) as max_rank,
+    SUM(CASE WHEN global_relevance > 0.01 THEN 1 ELSE 0 END) as influential
+FROM named_entities
+WHERE global_relevance > 0
+GROUP BY entity_type
+ORDER BY avg_rank DESC;
+```
+
+**Entidades con mayor conectividad**:
+```sql
+SELECT
+    name,
+    entity_type,
+    diversity,
+    article_count,
+    global_relevance
+FROM named_entities
+WHERE diversity > 0
+ORDER BY diversity DESC
+LIMIT 20;
+```
+
+### Frecuencia de Actualización
+
+El ranking global **no se calcula automáticamente**. Se debe ejecutar manualmente con `news entity rerank`.
+
+**Recomendaciones**:
+- **Diario**: Para portales de noticias en producción
+- **Después de procesar lotes grandes**: Si se agregan 100+ artículos nuevos
+- **Semanal**: Para desarrollo/testing
+
+### Validación
+
+Después de calcular el ranking, verificar:
+
+1. **Suma de probabilidades**: `SUM(pagerank) ≈ 1.0` (distribución de PageRank)
+2. **Normalización**: `MAX(global_relevance) = 1.0` y `MIN(global_relevance) = 0.0`
+3. **Top entidades coherentes**: Presidentes, ministros, organizaciones principales deben tener scores altos
+4. **Convergencia**: El algoritmo debe converger en <50 iteraciones típicamente
+5. **Distribución**: La entidad más importante debe tener `global_relevance = 1.0`
+
+### Consideraciones de Performance
+
+- **~1000 entidades**: Matriz 1000×1000, procesa en <5 segundos
+- **10k+ entidades**: Considerar:
+  - Usar sparse matrices (`scipy.sparse`)
+  - Filtrar por tiempo (últimos N meses)
+  - Incrementar threshold de relevancia
+
+**Memoria estimada**:
+- 1000 entidades: ~8 MB (matriz densa)
+- 10000 entidades: ~800 MB
+
