@@ -207,6 +207,7 @@ uv run news entity search "Luis"
 ## Roadmap
 
 - Cache DB (cache de artículos conocidos, util para re-indexación)
+- Hacer que la IA pueda revisar hacer review de las entidades (con flag --auto-accept)
 - Calcular relevancia de las noticias antes de publicar
 - API REST para consulta de artículos
 - Frontend para visualización

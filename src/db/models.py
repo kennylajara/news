@@ -51,6 +51,7 @@ class EntityClassification(enum.Enum):
     CANONICAL = "canonical"        # Primary entity (the "real" one)
     ALIAS = "alias"                # Alias/variant of another entity
     AMBIGUOUS = "ambiguous"        # Ambiguous entity that could refer to multiple canonical entities
+    NOT_AN_ENTITY = "not_an_entity"  # False positive (not actually an entity)
 
 # Association table for many-to-many relationship between articles and tags
 article_tags = Table(
@@ -218,6 +219,31 @@ class NamedEntity(Base):
         return f"<NamedEntity(name='{self.name}', type={self.entity_type.value}, classified_as={self.classified_as.value})>"
 
     # Helper methods for safe classification changes
+    def set_as_not_entity(self, session):
+        """
+        Set entity as NOT_AN_ENTITY (false positive).
+        Validates: Must clear alias_for and all same_as relationships.
+
+        Raises:
+            ValueError: If entity is not persisted
+        """
+        if self.id is None:
+            raise ValueError(
+                f"Entity '{self.name}' must be persisted (committed/flushed) before changing classification"
+            )
+
+        # Clear any existing same_as relationships
+        session.execute(
+            entity_same_as.delete().where(
+                (entity_same_as.c.ambiguous_entity_id == self.id) |
+                (entity_same_as.c.canonical_entity_id == self.id)
+            )
+        )
+
+        self.classified_as = EntityClassification.NOT_AN_ENTITY
+        self.alias_for_id = None
+        self.alias_for = None
+
     def set_as_canonical(self, session):
         """
         Set entity as CANONICAL.
@@ -348,6 +374,9 @@ class NamedEntity(Base):
                     errors.append("AMBIGUOUS entity cannot have alias_for")
                 # Can't validate same_as relationships before persistence
                 errors.append("AMBIGUOUS entity not yet persisted - cannot validate same_as relationships")
+            elif self.classified_as == EntityClassification.NOT_AN_ENTITY:
+                if self.alias_for_id is not None:
+                    errors.append("NOT_AN_ENTITY cannot have alias_for")
 
             return (len(errors) == 0, errors)
 
@@ -392,6 +421,20 @@ class NamedEntity(Base):
             if outgoing < 2:
                 errors.append(f"AMBIGUOUS entity must have 2+ same_as relationships (has {outgoing})")
 
+        elif self.classified_as == EntityClassification.NOT_AN_ENTITY:
+            if self.alias_for_id is not None:
+                errors.append("NOT_AN_ENTITY cannot have alias_for")
+
+            outgoing = session.query(entity_same_as).filter(
+                entity_same_as.c.ambiguous_entity_id == self.id
+            ).count()
+            incoming = session.query(entity_same_as).filter(
+                entity_same_as.c.canonical_entity_id == self.id
+            ).count()
+
+            if outgoing > 0 or incoming > 0:
+                errors.append("NOT_AN_ENTITY cannot have same_as relationships")
+
         return (len(errors) == 0, errors)
 
 
@@ -404,6 +447,7 @@ def validate_alias_for_constraint(mapper, connection, target):
     - CANONICAL: alias_for_id must be NULL
     - ALIAS: alias_for_id must NOT be NULL
     - AMBIGUOUS: alias_for_id must be NULL
+    - NOT_AN_ENTITY: alias_for_id must be NULL
 
     This is the ONLY automatic validation. For full validation including
     same_as relationships, use the set_as_* helper methods or manually
@@ -434,6 +478,15 @@ def validate_alias_for_constraint(mapper, connection, target):
             raise IntegrityError(
                 f"AMBIGUOUS entity '{target.name}' cannot have alias_for set. "
                 f"Use set_as_ambiguous() method for safe classification changes.",
+                params=None,
+                orig=None
+            )
+
+    elif classification == EntityClassification.NOT_AN_ENTITY:
+        if target.alias_for_id is not None:
+            raise IntegrityError(
+                f"NOT_AN_ENTITY '{target.name}' cannot have alias_for set. "
+                f"Use set_as_not_entity() method for safe classification changes.",
                 params=None,
                 orig=None
             )

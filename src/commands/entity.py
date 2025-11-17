@@ -635,6 +635,7 @@ def review_start(entity_id, no_pager):
         output_lines.append(f"  • Change type: news entity review-classify {entity_id} --type <new_type>")
         output_lines.append(f"  • Mark as alias: news entity classify-alias {entity_id} <canonical_id>")
         output_lines.append(f"  • Mark as ambiguous: news entity classify-ambiguous {entity_id} <id1> <id2> ...")
+        output_lines.append(f"  • Mark as false positive: news entity classify-not-entity {entity_id}")
 
         output_text = "\n".join(output_lines)
 
@@ -870,6 +871,49 @@ def classify_canonical(entity_id):
     except Exception as e:
         session.rollback()
         click.echo(click.style(f"✗ Error setting canonical: {str(e)}", fg="red"))
+
+    finally:
+        session.close()
+
+
+@entity.command()
+@click.argument('entity_id', type=int)
+def classify_not_entity(entity_id):
+    """
+    Mark entity as NOT_AN_ENTITY (false positive).
+
+    Use this for entities that spaCy incorrectly detected as entities
+    (e.g., "según" classified as PERSON).
+
+    Examples:
+        news entity classify-not-entity 123
+    """
+    db = Database()
+    session = db.get_session()
+
+    try:
+        entity = session.query(NamedEntity).filter_by(id=entity_id).first()
+
+        if not entity:
+            click.echo(click.style(f"✗ Entity ID {entity_id} not found", fg="red"))
+            return
+
+        # Use helper method for safe classification
+        entity.set_as_not_entity(session)
+        entity.needs_review = 0
+        entity.last_review = datetime.utcnow()
+
+        session.commit()
+
+        click.echo(click.style(f"✓ Marked '{entity.name}' as NOT_AN_ENTITY (false positive)", fg="green"))
+        click.echo(f"  This entity will be excluded from ranking and analysis")
+
+    except ValueError as e:
+        session.rollback()
+        click.echo(click.style(f"✗ Validation error: {str(e)}", fg="red"))
+    except Exception as e:
+        session.rollback()
+        click.echo(click.style(f"✗ Error setting NOT_AN_ENTITY: {str(e)}", fg="red"))
 
     finally:
         session.close()
