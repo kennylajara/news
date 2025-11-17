@@ -139,22 +139,27 @@ uv run news domain stats
 
 ## Procesamiento de Batches
 
-### `news domain process start`
+### `news process start`
 
 Crea y ejecuta un batch de procesamiento.
 
 **Opciones:**
 - `-d, --domain`: Dominio a procesar (requerido)
 - `-t, --type`: Tipo de procesamiento (requerido)
-  - `enrich_article`: Enriquecimiento con NER
+  - `enrich_article`: Clustering + NER (sin OpenAI)
+  - `generate_flash_news`: Generación de flash news con LLM
 - `-s, --size`: Tamaño del batch (default: 10)
 
-**Ejemplo:**
+**Ejemplos:**
 ```bash
-uv run news domain process start -d diariolibre.com -t enrich_article -s 10
+# Paso 1: Enriquecimiento base
+uv run news process start -d diariolibre.com -t enrich_article -s 10
+
+# Paso 2: Generación de flash news (requiere artículos enriquecidos)
+uv run news process start -d diariolibre.com -t generate_flash_news -s 10
 ```
 
-### `news domain process list`
+### `news process list`
 
 Lista batches de procesamiento con filtros.
 
@@ -166,14 +171,14 @@ Lista batches de procesamiento con filtros.
 
 **Ejemplos:**
 ```bash
-uv run news domain process list
-uv run news domain process list --limit 50
-uv run news domain process list --status completed
-uv run news domain process list --domain diariolibre.com
-uv run news domain process list --domain diariolibre.com --status failed
+uv run news process list
+uv run news process list --limit 50
+uv run news process list --status completed
+uv run news process list --domain diariolibre.com
+uv run news process list --domain diariolibre.com --status failed
 ```
 
-### `news domain process show <batch_id>`
+### `news process show <batch_id>`
 
 Muestra información detallada de un batch.
 
@@ -182,14 +187,14 @@ Muestra información detallada de un batch.
 
 **Ejemplos:**
 ```bash
-uv run news domain process show 1
-uv run news domain process show 1 --item 5
+uv run news process show 1
+uv run news process show 1 --item 5
 ```
 
 **Información mostrada (batch):**
 - Metadatos (fuente, tipo, estado)
 - Progreso (total, procesados, exitosos, fallidos)
-- Estadísticas agregadas (entidades encontradas, nuevas, existentes)
+- Estadísticas agregadas (varía según tipo de proceso)
 - Tiempos de ejecución y duración
 - Resumen de items por estado
 - Primeros 5 items fallidos con errores
@@ -200,6 +205,82 @@ uv run news domain process show 1 --item 5
 - Tiempos de ejecución y duración
 - Mensaje de error (si falló)
 - Logs completos del procesamiento
+
+---
+
+## Flash News
+
+### `news flash list`
+
+Lista flash news generados.
+
+**Opciones:**
+- `--article-id`: Filtrar por ID de artículo
+- `--domain`: Filtrar por dominio
+- `--published`: Mostrar solo publicados
+- `--unpublished`: Mostrar solo no publicados
+- `--limit`: Número de resultados (default: 50)
+- `--no-pager`: Desactivar paginación
+
+**Ejemplos:**
+```bash
+uv run news flash list
+uv run news flash list --published
+uv run news flash list --domain diariolibre.com
+uv run news flash list --article-id 5
+```
+
+### `news flash show <id>`
+
+Muestra detalles completos de un flash news.
+
+**Ejemplo:**
+```bash
+uv run news flash show 1
+```
+
+**Información mostrada:**
+- Estado de publicación
+- Resumen completo generado por LLM
+- Artículo fuente (título, URL, fecha)
+- Información del cluster (categoría, score, tamaño)
+- Oraciones del cluster usadas para generar el resumen
+
+### `news flash publish <id>`
+
+Marca un flash news como publicado.
+
+**Ejemplo:**
+```bash
+uv run news flash publish 1
+```
+
+### `news flash unpublish <id>`
+
+Marca un flash news como no publicado.
+
+**Ejemplo:**
+```bash
+uv run news flash unpublish 1
+```
+
+### `news flash stats`
+
+Muestra estadísticas de flash news.
+
+**Opciones:**
+- `--domain`: Filtrar por dominio
+
+**Ejemplos:**
+```bash
+uv run news flash stats
+uv run news flash stats --domain diariolibre.com
+```
+
+**Información mostrada:**
+- Total de flash news
+- Publicados vs no publicados (con porcentajes)
+- Desglose por dominio
 
 ---
 
@@ -320,13 +401,19 @@ uv run news article fetch "https://example.com/article2"
 # 3. Verificar artículos pendientes
 uv run news article list --source example.com --pending-enrich
 
-# 4. Procesar artículos con NER
-uv run news domain process start -d example.com -t enrich_article -s 10
+# 4. Procesar artículos (enriquecimiento base)
+uv run news process start -d example.com -t enrich_article -s 10
 
-# 5. Ver progreso del batch
-uv run news domain process list --domain example.com
+# 5. Generar flash news
+uv run news process start -d example.com -t generate_flash_news -s 10
 
-# 6. Ver estadísticas actualizadas
+# 6. Ver progreso de batches
+uv run news process list --domain example.com
+
+# 7. Ver flash news generados
+uv run news flash list --domain example.com
+
+# 8. Ver estadísticas actualizadas
 uv run news domain stats
 ```
 
@@ -353,14 +440,17 @@ uv run news article show 1 --entities
 
 ```bash
 # 1. Ver batches recientes
-uv run news domain process list --limit 10
+uv run news process list --limit 10
 
 # 2. Ver batches fallidos
-uv run news domain process list --status failed
+uv run news process list --status failed
 
 # 3. Ver detalles de batch específico
-uv run news domain process show 5
+uv run news process show 5
 
 # 4. Ver logs de item fallido
-uv run news domain process show 5 --item 12
+uv run news process show 5 --item 12
+
+# 5. Ver estadísticas de flash news
+uv run news flash stats
 ```

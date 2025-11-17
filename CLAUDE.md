@@ -44,7 +44,7 @@ Este archivo proporciona reglas y buenas prácticas para Claude Code al trabajar
 ### 6. CLI Commands
 
 - Usar **Click**
-- Comandos agrupados: `article`, `domain`, y `entity`
+- Comandos agrupados: `article`, `domain`, `entity`, `process`, y `flash`
 - Output con colores: verde=éxito, rojo=error, amarillo=advertencia
 - Confirmaciones para operaciones destructivas
 - Ver `--help` siempre debe ser útil
@@ -142,7 +142,14 @@ uv run news article list
 uv run news domain stats
 
 # Procesar artículos con IA
-uv run news domain process start -d diariolibre.com -t enrich_article -s 10
+# Paso 1: Enriquecimiento base (clustering + NER)
+uv run news process start -d diariolibre.com -t enrich_article -s 10
+
+# Paso 2: Generación de flash news (OpenAI)
+uv run news process start -d diariolibre.com -t generate_flash_news -s 10
+
+# Ver flash news generados
+uv run news flash list
 
 # Acceso directo a base de datos
 sqlite3 data/news.db

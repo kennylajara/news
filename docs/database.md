@@ -37,7 +37,8 @@ Rastrea la última vez que se ejecutó cada tipo de procesamiento por dominio.
 | updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
 
 **Valores de `process_type`**:
-- `enrich_article`: Enriquecimiento de artículos
+- `enrich_article`: Enriquecimiento de artículos (clustering + NER)
+- `generate_flash_news`: Generación de flash news con LLM
 
 **Relaciones**:
 - N:1 con `sources` (múltiples procesos pertenecen a un source)
@@ -364,10 +365,11 @@ Resúmenes narrativos generados automáticamente desde clusters core usando LLM.
 - `published` es INTEGER (0/1) porque SQLite no tiene BOOLEAN nativo
 
 **Generación**:
-- Automática durante FASE 1.1 del procesamiento `enrich_article`
-- Solo se generan para clusters con `category='core'`
+- Proceso independiente `generate_flash_news` (separado de `enrich_article`)
+- Solo se generan para clusters con `category='CORE'`
 - Usa OpenAI API con Structured Outputs (Pydantic validation)
 - Embedding generado con `sentence-transformers` (mismo modelo que clustering)
+- Idempotente: detecta y salta clusters que ya tienen flash news
 
 **Uso**:
 - `published=0`: Flash news generada pero no publicada

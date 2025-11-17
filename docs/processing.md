@@ -8,18 +8,29 @@ El sistema de procesamiento por lotes permite ejecutar diferentes tipos de proce
 
 ### Enriquecimiento de Artículos (`enrich_article`)
 
-Proceso completo que incluye clustering semántico, generación de flash news con LLM, y extracción de entidades nombradas (NER).
+Proceso base que incluye clustering semántico y extracción de entidades nombradas (NER). **No incluye llamadas a OpenAI**.
 
 **Características**:
 - **Clustering semántico** de oraciones con clasificación (core, secondary, filler)
-- **Generación automática de flash news** desde clusters core usando OpenAI
 - **NER con spaCy**: Modelo `es_core_news_sm` (español), 18 tipos de entidades
-- **Relevancia ajustada por clusters**: Entidades en clusters core reciben boost
-- **Embeddings automáticos** para resúmenes y búsqueda semántica
+- **Relevancia ajustada por clusters**: Entidades en clusters core reciben boost (1.3x)
 - Asocia entidades a artículos con conteo de menciones
 - Calcula relevancia local (ver sección "Cálculo de Relevancia")
 - Actualiza contador global de artículos por entidad
 - Guarda logs detallados del procesamiento
+- **Performance**: ~7-8 segundos por artículo (sin llamadas API)
+
+### Generación de Flash News (`generate_flash_news`)
+
+Proceso independiente que genera resúmenes narrativos desde clusters CORE usando OpenAI. **Requiere que los artículos ya estén enriquecidos** (con clustering completado).
+
+**Características**:
+- **Generación con LLM**: Usa OpenAI Structured Outputs (GPT-4/5)
+- **Embeddings automáticos** para resúmenes y búsqueda semántica
+- **Idempotente**: Detecta y salta clusters que ya tienen flash news
+- **Manejo robusto de errores**: Fallas individuales no afectan otros clusters
+- **Stats detalladas**: core_clusters_found, flash_news_generated, flash_news_skipped
+- **Performance**: ~10-15 segundos por cluster (según modelo de OpenAI)
 
 ## Comandos CLI
 
@@ -28,18 +39,23 @@ Proceso completo que incluye clustering semántico, generación de flash news co
 Crea y ejecuta un batch de procesamiento para artículos de un dominio.
 
 ```bash
-uv run news domain process start -d <dominio> -t <tipo> -s <tamaño>
+uv run news process start -d <dominio> -t <tipo> -s <tamaño>
 ```
 
 **Parámetros**:
 - `-d, --domain`: Dominio a procesar (requerido)
 - `-t, --type`: Tipo de procesamiento (requerido)
-  - `enrich_article`: Enriquecimiento con NER
+  - `enrich_article`: Clustering + NER (sin OpenAI)
+  - `generate_flash_news`: Generación de flash news con LLM
 - `-s, --size`: Tamaño del batch (default: 10)
 
-**Ejemplo**:
+**Ejemplos**:
 ```bash
-uv run news domain process start -d diariolibre.com -t enrich_article -s 10
+# Paso 1: Enriquecimiento base (clustering + NER)
+uv run news process start -d diariolibre.com -t enrich_article -s 10
+
+# Paso 2: Generación de flash news (OpenAI)
+uv run news process start -d diariolibre.com -t generate_flash_news -s 10
 ```
 
 ### Listar Batches
@@ -47,7 +63,7 @@ uv run news domain process start -d diariolibre.com -t enrich_article -s 10
 Muestra todos los batches de procesamiento con opciones de filtrado.
 
 ```bash
-uv run news domain process list [opciones]
+uv run news process list [opciones]
 ```
 
 **Parámetros opcionales**:
@@ -58,16 +74,16 @@ uv run news domain process list [opciones]
 **Ejemplos**:
 ```bash
 # Listar últimos 20 batches
-uv run news domain process list
+uv run news process list
 
 # Listar batches completados
-uv run news domain process list --status completed
+uv run news process list --status completed
 
 # Listar batches de un dominio
-uv run news domain process list --domain diariolibre.com
+uv run news process list --domain diariolibre.com
 
 # Combinar filtros
-uv run news domain process list --domain diariolibre.com --status failed --limit 10
+uv run news process list --domain diariolibre.com --status failed --limit 10
 ```
 
 ### Ver Detalles de Batch
@@ -75,12 +91,16 @@ uv run news domain process list --domain diariolibre.com --status failed --limit
 Muestra información detallada sobre un batch específico.
 
 ```bash
-uv run news domain process show <batch_id>
+uv run news process show <batch_id> [--item <item_id>]
 ```
 
-**Ejemplo**:
+**Ejemplos**:
 ```bash
-uv run news domain process show 1
+# Ver resumen del batch
+uv run news process show 1
+
+# Ver logs detallados de un item específico
+uv run news process show 1 --item 5
 ```
 
 **Información mostrada**:
@@ -93,53 +113,77 @@ uv run news domain process show 1
 
 ## Flujo de Procesamiento
 
-1. **Selección de artículos**: Se seleccionan artículos no enriquecidos (`enriched_at IS NULL`)
-2. **Creación de batch**: Se crea un registro en `processing_batches`
-3. **Creación de items**: Se crean registros en `batch_items` para cada artículo (transacción atómica)
-4. **Procesamiento** (por cada artículo):
+### Proceso: `enrich_article`
+
+1. **Selección de artículos**: Artículos con `enriched_at IS NULL`
+2. **Creación de batch y items**: Transacción atómica en `processing_batches` y `batch_items`
+3. **Procesamiento por artículo**:
 
    **FASE 1: Clustering Semántico**
    - Extrae oraciones del contenido (excluye headers markdown)
    - Genera embeddings con `paraphrase-multilingual-MiniLM-L12-v2`
    - Clustering con UMAP + HDBSCAN
-   - Clasifica clusters en: core, secondary, filler
+   - Clasifica clusters en: core (≥0.60), secondary (0.30-0.60), filler (<0.30)
    - Guarda en `article_clusters` y `article_sentences`
    - Marca artículo como `cluster_enriched_at`
-
-   **FASE 1.1: Generación de Flash News** (NUEVO)
-   - Filtra clusters con categoría `core`
-   - Para cada cluster core:
-     - Renderiza prompts (system + user) con Jinja2
-     - Llama OpenAI API con Structured Outputs
-     - Recibe resumen JSON estructurado (validado con Pydantic)
-     - Genera embedding del resumen
-     - Crea registro `FlashNews` (published=0)
-   - Manejo robusto de errores: fallas individuales no afectan otros clusters
 
    **FASE 2: Named Entity Recognition**
    - Extrae entidades con spaCy desde título, subtítulo y contenido
    - Detecta 18 tipos de entidades (PERSON, ORG, GPE, etc.)
    - Cuenta menciones de cada entidad
+   - Crea/actualiza registros en `named_entities`
 
    **FASE 2.1: Cluster Boost**
-   - Aplica multiplicadores según presencia en clusters semánticos:
-     - Cluster core: 1.3x
-     - Cluster secondary: 1.0x
-     - Resto: 0.7x
+   - Aplica multiplicadores según presencia en clusters:
+     - Cluster core: **1.3x**
+     - Cluster secondary: **1.0x**
+     - Resto (filler/sin cluster): **0.7x**
 
    **FASE 3: Normalización de Relevancia**
    - Calcula relevancia base (menciones/total)
-   - Aplica bonos (título +50%, subtítulo +25%, posición, etc.)
+   - Aplica bonos (título +50%, subtítulo +25%, posición, menciones extra)
    - Aplica cluster boost
-   - Normaliza para que la entidad más relevante tenga score 1.0
+   - Normaliza para que entidad más relevante = 1.0
    - Guarda en `article_entities` con menciones y relevancia
 
-   **FASE 4: Actualización de Registros**
+   **FASE 4: Finalización**
    - Marca artículo como enriquecido (`enriched_at`)
    - Actualiza batch item con logs y estadísticas
    - Commit a base de datos
 
-5. **Finalización**: Se actualiza el batch con estadísticas finales
+4. **Finalización del batch**: Actualiza estadísticas agregadas
+
+### Proceso: `generate_flash_news`
+
+1. **Selección de artículos**: Artículos con `cluster_enriched_at IS NOT NULL` (ya tienen clusters)
+2. **Creación de batch y items**: Transacción atómica
+3. **Procesamiento por artículo**:
+
+   **FASE 1: Obtención de Clusters CORE**
+   - Query a `article_clusters` filtrando por `category = 'CORE'`
+   - Si no hay clusters core, marca item como completado y continúa
+
+   **FASE 2: Generación de Flash News por Cluster**
+   - Para cada cluster core:
+     - **Verificación de idempotencia**: Salta si ya existe flash news para ese cluster
+     - **Obtención de oraciones**: Query a `article_sentences` ordenadas por índice
+     - **Preparación de datos**: Diccionario con título, oraciones del cluster, score
+     - **Llamada a LLM**:
+       - Renderiza prompts Jinja2 (system + user)
+       - Llama OpenAI API con Structured Outputs
+       - Recibe resumen JSON (validado con Pydantic)
+     - **Generación de embedding**: Embedding del resumen con mismo modelo que clustering
+     - **Guardado**: Crea registro `FlashNews` (published=0)
+   - **Manejo de errores**: Fallas en un cluster no afectan otros
+
+   **FASE 3: Finalización**
+   - Actualiza batch item con estadísticas:
+     - `core_clusters_found`
+     - `flash_news_generated`
+     - `flash_news_skipped`
+   - Commit a base de datos
+
+4. **Finalización del batch**: Actualiza estadísticas agregadas
 
 ## Entidades Extraídas
 
@@ -279,9 +323,12 @@ Normalización (max = 0.9):
 La mayoría de consultas comunes están disponibles a través de comandos CLI. Ver [Referencia de Comandos](commands.md) para la documentación completa.
 
 **Ejemplos:**
-- Ver batches: `uv run news domain process list`
-- Ver detalles de batch: `uv run news domain process show <batch_id>`
-- Ver logs de item: `uv run news domain process show <batch_id> --item <item_id>`
+- Ver batches: `uv run news process list`
+- Ver detalles de batch: `uv run news process show <batch_id>`
+- Ver logs de item: `uv run news process show <batch_id> --item <item_id>`
+- Ver flash news: `uv run news flash list`
+- Ver detalles de flash news: `uv run news flash show <id>`
+- Ver estadísticas de flash news: `uv run news flash stats`
 - Ver entidades más relevantes: `uv run news entity list`
 - Ver artículos enriquecidos: `uv run news article list --enriched`
 - Ver artículos pendientes: `uv run news article list --pending-enrich`

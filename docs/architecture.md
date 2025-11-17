@@ -11,10 +11,15 @@ Usuario → CLI (Click) → get_news.py → Extractor (plugin) → Database (SQL
 - `src/cli.py` - Punto de entrada del CLI, enruta a grupos de comandos
 - `src/commands/article.py` - Comandos de gestión de artículos
 - `src/commands/domain.py` - Comandos de gestión de fuentes/dominios
+- `src/commands/process.py` - Comandos de procesamiento por batches (clustering, NER, flash news)
+- `src/commands/entity.py` - Comandos de gestión de entidades nombradas
+- `src/commands/flash.py` - Comandos de gestión de flash news
 - `src/get_news.py` - Orquestación principal: descargar → limpiar → extraer → guardar
 - `src/db/database.py` - Fachada de base de datos con operaciones CRUD
-- `src/db/models.py` - Modelos SQLAlchemy (Source, Article, Tag)
+- `src/db/models.py` - Modelos SQLAlchemy (Source, Article, Tag, NamedEntity, ArticleCluster, FlashNews, etc.)
 - `src/extractors/{domain}_com.py` - Extractores de contenido específicos por dominio
+- `src/domain/enrich_article.py` - Procesamiento: clustering semántico + NER
+- `src/domain/generate_flash_news.py` - Generación de resúmenes narrativos con LLM
 
 ## Pipeline de Descarga de Artículos
 
@@ -29,19 +34,53 @@ Usuario → CLI (Click) → get_news.py → Extractor (plugin) → Database (SQL
 ### Esquema
 
 ```
-sources (1:N articles)
-  ├─ id, domain (unique), name, created_at
+sources (1:N articles, 1:N domain_processes, 1:N processing_batches)
+  ├─ id, domain (unique), name, created_at, updated_at
 
-articles (N:1 source, M:N tags)
-  ├─ id, hash (SHA-256, unique), url (unique), source_id
+articles (N:1 source, M:N tags, M:N named_entities, 1:N article_clusters, 1:N article_sentences)
+  ├─ id, hash (SHA-256, unique), url, source_id
   ├─ title, subtitle, author, published_date, location, category
-  ├─ content (Markdown), created_at, updated_at
+  ├─ content (Markdown), enriched_at, cluster_enriched_at
+  ├─ created_at, updated_at
 
 tags (M:N articles via article_tags)
-  ├─ id, name (unique), created_at
+  ├─ id, name (unique), created_at, updated_at
 
 article_tags (tabla de asociación)
   ├─ article_id, tag_id
+
+named_entities (M:N articles via article_entities)
+  ├─ id, name (unique), entity_type, description, photo_url
+  ├─ article_count, trend, created_at, updated_at
+
+article_entities (tabla de asociación con metadata)
+  ├─ article_id, entity_id, mentions, relevance
+
+article_clusters (N:1 article, 1:1 flash_news)
+  ├─ id, article_id, cluster_label, category, score, size
+  ├─ centroid_embedding, sentence_indices, created_at, updated_at
+
+article_sentences (N:1 article, N:1 article_clusters)
+  ├─ id, article_id, sentence_index, sentence_text
+  ├─ cluster_id, embedding, created_at
+
+flash_news (1:1 article_clusters)
+  ├─ id, cluster_id (unique), summary, embedding
+  ├─ published, created_at, updated_at
+
+domain_processes (N:1 source)
+  ├─ source_id, process_type, last_processed_at, created_at, updated_at
+
+processing_batches (N:1 source, 1:N batch_items)
+  ├─ id, source_id, process_type, status
+  ├─ total_items, processed_items, successful_items, failed_items
+  ├─ error_message, stats (JSON), started_at, completed_at
+  ├─ created_at, updated_at
+
+batch_items (N:1 processing_batches, N:1 articles)
+  ├─ id, batch_id, article_id, status
+  ├─ error_message, logs, stats (JSON)
+  ├─ started_at, completed_at, created_at, updated_at
 ```
 
 ### Deduplicación
@@ -60,11 +99,27 @@ Se usa hash SHA-256 de la URL para prevenir re-descargas. El hash es único e in
 
 ```
 src/
-├── commands/          # Grupos de comandos CLI (article, domain)
+├── commands/          # Grupos de comandos CLI
+│   ├── article.py    # Comandos de artículos (fetch, list, show, delete)
+│   ├── domain.py     # Comandos de dominios (list, stats)
+│   ├── process.py    # Comandos de procesamiento (start, list, show)
+│   ├── entity.py     # Comandos de entidades (list, show, stats)
+│   └── flash.py      # Comandos de flash news (list, show, publish, stats)
 ├── db/               # Modelos de base de datos y operaciones
-├── extractors/       # Extractores de contenido específicos por dominio
+│   ├── models.py     # Modelos SQLAlchemy
+│   └── database.py   # Fachada CRUD
+├── domain/           # Lógica de procesamiento de dominio
+│   ├── enrich_article.py       # Clustering + NER
+│   └── generate_flash_news.py  # Generación LLM de resúmenes
+├── llm/              # Integración con LLMs
+│   ├── prompts/      # Prompts Jinja2 y schemas Pydantic
+│   └── openai_structured_output.py  # Wrapper genérico
+├── extractors/       # Extractores específicos por dominio
+│   ├── html_to_markdown.py      # Helpers de conversión
+│   └── {domain}_com.py          # Extractores por sitio
 ├── cli.py            # Punto de entrada principal del CLI
-└── get_news.py       # Lógica principal de descarga/extracción
+├── get_news.py       # Lógica de descarga/extracción
+└── settings.py       # Gestión de configuración y variables de entorno
 ```
 
 ### Configuración
