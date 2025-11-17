@@ -3,8 +3,9 @@ SQLAlchemy models for news portal.
 """
 
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Text, DateTime, Table, ForeignKey, Index, Enum, JSON, Float
-from sqlalchemy.orm import relationship, declarative_base
+from sqlalchemy import Column, Integer, String, Text, DateTime, Table, ForeignKey, Index, Enum, JSON, Float, event
+from sqlalchemy.orm import relationship, declarative_base, Session
+from sqlalchemy.exc import IntegrityError
 import enum
 
 Base = declarative_base()
@@ -44,6 +45,13 @@ class ClusterCategory(enum.Enum):
     SECONDARY = "secondary"        # Important related topics
     FILLER = "filler"              # Filler or contextual information
 
+
+class EntityClassification(enum.Enum):
+    """Classification of named entities for disambiguation."""
+    CANONICAL = "canonical"        # Primary entity (the "real" one)
+    ALIAS = "alias"                # Alias/variant of another entity
+    AMBIGUOUS = "ambiguous"        # Ambiguous entity that could refer to multiple canonical entities
+
 # Association table for many-to-many relationship between articles and tags
 article_tags = Table(
     'article_tags',
@@ -62,9 +70,20 @@ article_entities = Table(
     Column('entity_id', Integer, ForeignKey('named_entities.id', ondelete='CASCADE'), primary_key=True),
     Column('mentions', Integer, nullable=False, default=1),      # Number of mentions in this article
     Column('relevance', Float, nullable=False, default=0.0),     # Calculated relevance score for this article-entity pair
+    Column('context_sentences', JSON, nullable=True),            # List of sentences where entity was found (for manual review)
     Index('idx_article_entities_article', 'article_id'),
     Index('idx_article_entities_entity', 'entity_id'),
     Index('idx_article_entities_relevance', 'relevance')
+)
+
+# Association table for same_as relationship (ambiguous entities point to canonical entities)
+entity_same_as = Table(
+    'entity_same_as',
+    Base.metadata,
+    Column('ambiguous_entity_id', Integer, ForeignKey('named_entities.id', ondelete='CASCADE'), primary_key=True),
+    Column('canonical_entity_id', Integer, ForeignKey('named_entities.id', ondelete='CASCADE'), primary_key=True),
+    Index('idx_entity_same_as_ambiguous', 'ambiguous_entity_id'),
+    Index('idx_entity_same_as_canonical', 'canonical_entity_id')
 )
 
 
@@ -165,6 +184,12 @@ class NamedEntity(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=False, unique=True, index=True)
     entity_type = Column(Enum(EntityType), nullable=False)
+    detected_types = Column(JSON, nullable=True)  # List of EntityType values spaCy has detected for this entity
+
+    # Entity classification for disambiguation
+    classified_as = Column(Enum(EntityClassification), nullable=False, default=EntityClassification.CANONICAL, index=True)
+    alias_for_id = Column(Integer, ForeignKey('named_entities.id', ondelete='SET NULL'), nullable=True, index=True)
+
     description = Column(Text, nullable=True)
     photo_url = Column(String(500), nullable=True)
     article_count = Column(Integer, nullable=False, default=0)  # Number of articles that mention this entity
@@ -173,12 +198,245 @@ class NamedEntity(Base):
     pagerank = Column(Float, nullable=True, default=0.0)  # Raw PageRank score (unnormalized)
     global_relevance = Column(Float, nullable=True, default=0.0, index=True)  # Normalized PageRank (0.0-1.0, min-max scaled)
     last_rank_calculated_at = Column(DateTime, nullable=True, index=True)  # Last time global rank was calculated
+    needs_review = Column(Integer, nullable=False, default=1, index=True)  # 1=needs review, 0=reviewed and correct
+    last_review = Column(DateTime, nullable=True, index=True)  # Last time entity was manually reviewed
     trend = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
 
+    # Relationships
+    alias_for = relationship('NamedEntity', remote_side=[id], backref='aliases', foreign_keys=[alias_for_id])
+    same_as = relationship(
+        'NamedEntity',
+        secondary=entity_same_as,
+        primaryjoin=id == entity_same_as.c.ambiguous_entity_id,
+        secondaryjoin=id == entity_same_as.c.canonical_entity_id,
+        backref='ambiguous_mentions'
+    )
+
     def __repr__(self):
-        return f"<NamedEntity(name='{self.name}', type={self.entity_type.value}, article_count={self.article_count})>"
+        return f"<NamedEntity(name='{self.name}', type={self.entity_type.value}, classified_as={self.classified_as.value})>"
+
+    # Helper methods for safe classification changes
+    def set_as_canonical(self, session):
+        """
+        Set entity as CANONICAL.
+        Validates: alias_for must be None, no outgoing same_as relationships.
+
+        Raises:
+            ValueError: If entity is not persisted or has invalid relationships
+        """
+        if self.id is None:
+            raise ValueError(
+                f"Entity '{self.name}' must be persisted (committed/flushed) before changing classification"
+            )
+
+        # Check no outgoing same_as relationships
+        outgoing_count = session.query(entity_same_as).filter(
+            entity_same_as.c.ambiguous_entity_id == self.id
+        ).count()
+
+        if outgoing_count > 0:
+            raise ValueError(
+                f"Cannot set '{self.name}' as CANONICAL: has {outgoing_count} same_as relationships. "
+                f"Remove them first."
+            )
+
+        self.classified_as = EntityClassification.CANONICAL
+        self.alias_for_id = None
+        self.alias_for = None
+
+    def set_as_alias(self, canonical_entity, session):
+        """
+        Set entity as ALIAS of another canonical entity.
+        Validates: canonical_entity must be CANONICAL, removes all same_as relationships.
+
+        Args:
+            canonical_entity: NamedEntity instance that this entity is an alias of
+            session: SQLAlchemy session (needed to clear relationships)
+
+        Raises:
+            ValueError: If entity is not persisted or canonical_entity is invalid
+        """
+        if self.id is None:
+            raise ValueError(
+                f"Entity '{self.name}' must be persisted (committed/flushed) before changing classification"
+            )
+
+        if canonical_entity.id is None:
+            raise ValueError(
+                f"Canonical entity '{canonical_entity.name}' must be persisted before being referenced"
+            )
+
+        if canonical_entity.classified_as != EntityClassification.CANONICAL:
+            raise ValueError(
+                f"Cannot set alias: '{canonical_entity.name}' is not CANONICAL "
+                f"(is {canonical_entity.classified_as.value})"
+            )
+
+        # Clear any existing same_as relationships
+        session.execute(
+            entity_same_as.delete().where(
+                (entity_same_as.c.ambiguous_entity_id == self.id) |
+                (entity_same_as.c.canonical_entity_id == self.id)
+            )
+        )
+
+        self.classified_as = EntityClassification.ALIAS
+        self.alias_for = canonical_entity
+        self.alias_for_id = canonical_entity.id
+
+    def set_as_ambiguous(self, canonical_entities, session):
+        """
+        Set entity as AMBIGUOUS pointing to multiple canonical entities.
+        Validates: must have 2+ canonical entities, all must be CANONICAL.
+
+        Args:
+            canonical_entities: List of NamedEntity instances (must be CANONICAL)
+            session: SQLAlchemy session
+
+        Raises:
+            ValueError: If entity is not persisted or canonical entities are invalid
+        """
+        if self.id is None:
+            raise ValueError(
+                f"Entity '{self.name}' must be persisted (committed/flushed) before changing classification"
+            )
+
+        if len(canonical_entities) < 2:
+            raise ValueError(
+                f"AMBIGUOUS entity must point to at least 2 canonical entities "
+                f"(got {len(canonical_entities)})"
+            )
+
+        # Validate all are CANONICAL and persisted
+        for entity in canonical_entities:
+            if entity.id is None:
+                raise ValueError(
+                    f"Canonical entity '{entity.name}' must be persisted before being referenced"
+                )
+            if entity.classified_as != EntityClassification.CANONICAL:
+                raise ValueError(
+                    f"Cannot link to '{entity.name}': not CANONICAL "
+                    f"(is {entity.classified_as.value})"
+                )
+
+        self.classified_as = EntityClassification.AMBIGUOUS
+        self.alias_for_id = None
+        self.alias_for = None
+        self.same_as = canonical_entities
+
+    def validate_classification(self, session):
+        """
+        Validate entity classification constraints.
+        Returns tuple: (is_valid: bool, errors: List[str])
+
+        Note: This method can be called even if entity is not yet persisted.
+        """
+        errors = []
+
+        # If not persisted, can only validate basic field constraints
+        if self.id is None:
+            if self.classified_as == EntityClassification.CANONICAL:
+                if self.alias_for_id is not None:
+                    errors.append("CANONICAL entity cannot have alias_for")
+            elif self.classified_as == EntityClassification.ALIAS:
+                if self.alias_for_id is None:
+                    errors.append("ALIAS entity must have alias_for set")
+            elif self.classified_as == EntityClassification.AMBIGUOUS:
+                if self.alias_for_id is not None:
+                    errors.append("AMBIGUOUS entity cannot have alias_for")
+                # Can't validate same_as relationships before persistence
+                errors.append("AMBIGUOUS entity not yet persisted - cannot validate same_as relationships")
+
+            return (len(errors) == 0, errors)
+
+        # Full validation for persisted entities
+        if self.classified_as == EntityClassification.CANONICAL:
+            if self.alias_for_id is not None:
+                errors.append("CANONICAL entity cannot have alias_for")
+
+            outgoing = session.query(entity_same_as).filter(
+                entity_same_as.c.ambiguous_entity_id == self.id
+            ).count()
+            if outgoing > 0:
+                errors.append(f"CANONICAL entity has {outgoing} outgoing same_as relationships")
+
+        elif self.classified_as == EntityClassification.ALIAS:
+            if self.alias_for_id is None:
+                errors.append("ALIAS entity must have alias_for set")
+
+            outgoing = session.query(entity_same_as).filter(
+                entity_same_as.c.ambiguous_entity_id == self.id
+            ).count()
+            incoming = session.query(entity_same_as).filter(
+                entity_same_as.c.canonical_entity_id == self.id
+            ).count()
+
+            if outgoing > 0 or incoming > 0:
+                errors.append("ALIAS entity cannot have same_as relationships")
+
+        elif self.classified_as == EntityClassification.AMBIGUOUS:
+            if self.alias_for_id is not None:
+                errors.append("AMBIGUOUS entity cannot have alias_for")
+
+            incoming = session.query(entity_same_as).filter(
+                entity_same_as.c.canonical_entity_id == self.id
+            ).count()
+            if incoming > 0:
+                errors.append(f"AMBIGUOUS entity has {incoming} incoming same_as relationships")
+
+            outgoing = session.query(entity_same_as).filter(
+                entity_same_as.c.ambiguous_entity_id == self.id
+            ).count()
+            if outgoing < 2:
+                errors.append(f"AMBIGUOUS entity must have 2+ same_as relationships (has {outgoing})")
+
+        return (len(errors) == 0, errors)
+
+
+# Simple constraint validation (only for alias_for_id field)
+@event.listens_for(NamedEntity, 'before_insert')
+@event.listens_for(NamedEntity, 'before_update')
+def validate_alias_for_constraint(mapper, connection, target):
+    """
+    Validate simple constraint: alias_for_id compatibility with classified_as.
+    - CANONICAL: alias_for_id must be NULL
+    - ALIAS: alias_for_id must NOT be NULL
+    - AMBIGUOUS: alias_for_id must be NULL
+
+    This is the ONLY automatic validation. For full validation including
+    same_as relationships, use the set_as_* helper methods or manually
+    call validate_classification().
+    """
+    classification = target.classified_as
+
+    if classification == EntityClassification.CANONICAL:
+        if target.alias_for_id is not None:
+            raise IntegrityError(
+                f"CANONICAL entity '{target.name}' cannot have alias_for set. "
+                f"Use set_as_canonical() method for safe classification changes.",
+                params=None,
+                orig=None
+            )
+
+    elif classification == EntityClassification.ALIAS:
+        if target.alias_for_id is None:
+            raise IntegrityError(
+                f"ALIAS entity '{target.name}' must have alias_for set. "
+                f"Use set_as_alias() method for safe classification changes.",
+                params=None,
+                orig=None
+            )
+
+    elif classification == EntityClassification.AMBIGUOUS:
+        if target.alias_for_id is not None:
+            raise IntegrityError(
+                f"AMBIGUOUS entity '{target.name}' cannot have alias_for set. "
+                f"Use set_as_ambiguous() method for safe classification changes.",
+                params=None,
+                orig=None
+            )
 
 
 class ProcessingBatch(Base):

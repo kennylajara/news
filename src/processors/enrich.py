@@ -147,19 +147,22 @@ def calculate_cluster_boost(entity_text, clusters_info, sentences):
 
 def extract_entities(text):
     """
-    Extract named entities from text using spaCy.
+    Extract named entities from text using spaCy with their sentence contexts.
 
     Args:
         text: Text to process
 
     Returns:
-        List of tuples: [(entity_text, entity_type), ...]
+        Tuple of:
+            - entities: List of tuples: [(entity_text, entity_type), ...]
+            - entity_contexts: Dict mapping entity_text -> list of sentences containing it
     """
     if not nlp:
-        return []
+        return [], {}
 
     doc = nlp(text)
     entities = []
+    entity_contexts = {}  # entity_text -> [sentence1, sentence2, ...]
 
     for ent in doc.ents:
         # Map spaCy label to our EntityType
@@ -167,7 +170,18 @@ def extract_entities(text):
         if entity_type:
             entities.append((ent.text, entity_type))
 
-    return entities
+            # Get the sentence containing this entity
+            sentence_text = ent.sent.text.strip()
+
+            # Add to context list for this entity
+            if ent.text not in entity_contexts:
+                entity_contexts[ent.text] = []
+
+            # Only add if not already present (avoid duplicates)
+            if sentence_text not in entity_contexts[ent.text]:
+                entity_contexts[ent.text].append(sentence_text)
+
+    return entities, entity_contexts
 
 
 def process_article(article, batch_item, session):
@@ -346,7 +360,7 @@ def process_article(article, batch_item, session):
             text_parts.append(article.subtitle)
         text_parts.append(article.content)
         text = " ".join(text_parts)
-        entities = extract_entities(text)
+        entities, entity_contexts = extract_entities(text)
 
         stats['entities_found'] = len(entities)
         logs.append(f"Found {len(entities)} entities")
@@ -379,7 +393,9 @@ def process_article(article, batch_item, session):
                 entity = NamedEntity(
                     name=entity_text,
                     entity_type=entity_type,
+                    detected_types=[entity_type.value],  # Initialize with first detected type
                     article_count=1,  # First article mentioning this entity
+                    needs_review=1,  # New entities need review by default
                     trend=0
                 )
                 session.add(entity)
@@ -390,6 +406,15 @@ def process_article(article, batch_item, session):
                 # Update article count (increment for each article that mentions it)
                 entity.article_count += 1
                 stats['entities_existing'] += 1
+
+                # Update detected_types list if this type hasn't been seen before
+                if entity.detected_types is None:
+                    entity.detected_types = [entity_type.value]
+                    entity.needs_review = 1  # Inconsistent data, needs review
+                elif entity_type.value not in entity.detected_types:
+                    entity.detected_types = entity.detected_types + [entity_type.value]
+                    entity.needs_review = 1  # New type detected, needs review
+                    logs.append(f"  ⚠️  {entity_text}: New type '{entity_type.value}' detected (was: {entity.detected_types})")
 
             # Calculate raw relevance for this entity in this article
             raw_relevance = calculate_entity_relevance(article, entity_text, mention_count, total_mentions)
@@ -418,12 +443,16 @@ def process_article(article, batch_item, session):
             for entity_text, entity_id, mention_count, boosted_relevance, cluster_boost in boosted_relevances:
                 normalized_relevance = boosted_relevance * normalization_factor
 
+                # Get context sentences for this entity
+                context_sentences = entity_contexts.get(entity_text, [])
+
                 # Insert into article_entities association table
                 stmt = insert(article_entities).values(
                     article_id=article.id,
                     entity_id=entity_id,
                     mentions=mention_count,
-                    relevance=normalized_relevance
+                    relevance=normalized_relevance,
+                    context_sentences=context_sentences
                 )
                 session.execute(stmt)
 

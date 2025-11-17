@@ -207,6 +207,7 @@ uv run news entity search "Luis"
 ## Roadmap
 
 - Cache DB (cache de artículos conocidos, util para re-indexación)
+- Calcular relevancia de las noticias antes de publicar
 - API REST para consulta de artículos
 - Frontend para visualización
 - Sistema de publicación automática
@@ -217,3 +218,4 @@ uv run news entity search "Luis"
 - Desambiguación de entidades (una entidad puede referenciar a más de 2)
 - Relevancia por categoria
 - Reconocer monedas como un tipo de entidad (dólar, los dólares canadiense, peso, peso dominicano), diferenciarlo de MONEY (100 dólares, un peso, 100 pesos dominicanos)
+- Crear batches en el pagerank y guardar el motivo de finalización del cálculo (max iter, timeout, convergencia) 
