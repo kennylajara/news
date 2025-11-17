@@ -13,6 +13,7 @@ PERSON, ORG, FAC, GPE, LOC, EVENT, WORK_OF_ART, LAW, LANGUAGE, DATE
 """
 
 import numpy as np
+import time
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Set, Tuple, Optional
@@ -39,10 +40,11 @@ class EntityRankCalculator:
     def __init__(
         self,
         damping: float = 0.85,
-        max_iter: int = 100,
+        max_iter: int = 1000,
         tol: float = 1e-6,
         min_relevance_threshold: float = 0.3,
         time_decay_days: Optional[int] = None,
+        timeout_seconds: float = 30.0,
         initial_scores: Optional[Dict[str, float]] = None
     ):
         """
@@ -50,12 +52,14 @@ class EntityRankCalculator:
 
         Args:
             damping: Damping factor (0-1). Standard is 0.85.
-            max_iter: Maximum iterations for convergence.
+            max_iter: Maximum iterations for convergence (default: 1000).
             tol: Convergence tolerance.
             min_relevance_threshold: Ignore co-occurrences where both entities
                 have relevance below this threshold (reduces noise).
             time_decay_days: If set, apply exponential decay to older articles.
                 Articles older than this get less weight.
+            timeout_seconds: Graceful timeout in seconds (default: 30.0).
+                If exceeded, stops iteration and returns current state.
             initial_scores: Optional dict of entity -> previous score for warm start.
                 New entities not in dict will be initialized to midpoint of existing scores.
         """
@@ -64,6 +68,7 @@ class EntityRankCalculator:
         self.tol = tol
         self.min_relevance_threshold = min_relevance_threshold
         self.time_decay_days = time_decay_days
+        self.timeout_seconds = timeout_seconds
         self.initial_scores = initial_scores or {}
 
     def build_graph(
@@ -204,8 +209,10 @@ class EntityRankCalculator:
         else:
             pr = np.ones(n) / n
 
-        # PageRank iteration
+        # PageRank iteration with graceful timeout
         iterations = 0
+        start_time = time.time()
+
         for iteration in range(self.max_iter):
             iterations = iteration + 1
 
@@ -225,6 +232,11 @@ class EntityRankCalculator:
                 break
 
             pr = pr_new
+
+            # Graceful timeout check (doesn't raise error, just stops iterating)
+            elapsed_time = time.time() - start_time
+            if elapsed_time >= self.timeout_seconds:
+                break
 
         # Min-max normalization with NumPy (more efficient than Python)
         pr_min = pr.min()

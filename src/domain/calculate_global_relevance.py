@@ -128,10 +128,11 @@ def calculate_global_relevance(
     # Step 4: Calculate PageRank (returns both raw and normalized scores)
     calculator = EntityRankCalculator(
         damping=damping,
-        max_iter=100,
+        max_iter=1000,
         tol=1e-6,
         min_relevance_threshold=min_relevance_threshold,
         time_decay_days=time_decay_days,
+        timeout_seconds=30.0,
         initial_scores=previous_scores
     )
 

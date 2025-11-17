@@ -572,7 +572,7 @@ Los demás tipos (MONEY, PERCENT, QUANTITY, etc.) mantienen `global_relevance = 
    - Nuevas entidades: inicializar en midpoint = (max + min) / 2 (convergencia más rápida)
    - Normalizar vector inicial
 
-2. Iteración (hasta convergencia o max 100 iteraciones):
+2. Iteración (hasta convergencia, max 1000 iteraciones, o timeout 30s):
    PR_new(i) = (1-d)/N + d * Σ(PR(j) * w(j→i) / Σw(j→k))
 
    Donde:
@@ -584,7 +584,10 @@ Los demás tipos (MONEY, PERCENT, QUANTITY, etc.) mantienen `global_relevance = 
 
 4. Verificar convergencia: |PR_new - PR| < 1e-6
 
-5. Post-procesamiento:
+5. Verificar timeout: Si han pasado 30s, terminar gracefully
+   (No genera error, simplemente guarda el estado actual)
+
+6. Post-procesamiento:
    - Guardar resultado raw como `pagerank`
    - Normalizar con min-max scaling → `global_relevance` (0.0-1.0)
 ```
@@ -603,6 +606,8 @@ Los demás tipos (MONEY, PERCENT, QUANTITY, etc.) mantienen `global_relevance = 
 - Entidades sin enlaces salientes distribuyen su probabilidad uniformemente
 
 **Ajustes del Algoritmo**:
+- **Max iteraciones**: 1000 (suficiente para convergencia en la mayoría de casos)
+- **Timeout graceful**: 30 segundos (no genera error, guarda estado actual)
 - **Threshold de relevancia**: Ignorar co-ocurrencias débiles (default: 0.3)
 - **Normalización por documento**: Siempre activa (divide peso por # entidades/artículo)
 - **Time decay**: Dar menos peso a artículos antiguos (exponencial, opcional)
@@ -755,7 +760,8 @@ Después de calcular el ranking, verificar:
 1. **Suma de probabilidades**: `SUM(pagerank) ≈ 1.0` (distribución de PageRank)
 2. **Normalización**: `MAX(global_relevance) = 1.0` y `MIN(global_relevance) = 0.0`
 3. **Top entidades coherentes**: Presidentes, ministros, organizaciones principales deben tener scores altos
-4. **Convergencia**: El algoritmo debe converger en <50 iteraciones típicamente
+4. **Convergencia**: El algoritmo debe converger en <100 iteraciones típicamente
+   - Si llega a 1000 iteraciones o 30s timeout, revisar datos de entrada
 5. **Distribución**: La entidad más importante debe tener `global_relevance = 1.0`
 
 ### Consideraciones de Performance
