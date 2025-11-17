@@ -112,6 +112,8 @@ Entidades nombradas extraídas de artículos mediante NER (Named Entity Recognit
 | id | INTEGER | PRIMARY KEY | ID auto-incremental |
 | name | VARCHAR(255) | UNIQUE, NOT NULL, INDEX | Nombre de la entidad |
 | entity_type | ENUM | NOT NULL | Tipo de entidad |
+| detected_types | JSON | NULLABLE | Lista de tipos detectados por spaCy para esta entidad |
+| classified_as | ENUM | NOT NULL, DEFAULT 'canonical', INDEX | Clasificación para desambiguación |
 | description | TEXT | NULLABLE | Descripción de la entidad |
 | photo_url | VARCHAR(500) | NULLABLE | URL de la foto de la entidad |
 | article_count | INTEGER | NOT NULL, DEFAULT 0 | Número de artículos que mencionan esta entidad |
@@ -120,9 +122,17 @@ Entidades nombradas extraídas de artículos mediante NER (Named Entity Recognit
 | pagerank | FLOAT | NULLABLE, DEFAULT 0.0 | Score PageRank raw (sin normalizar) |
 | global_relevance | FLOAT | NULLABLE, DEFAULT 0.0, INDEX | PageRank normalizado (0.0-1.0, min-max scaled) |
 | last_rank_calculated_at | DATETIME | NULLABLE, INDEX | Última vez que se calculó ranking global |
+| needs_review | INTEGER | NOT NULL, DEFAULT 1, INDEX | 1=necesita revisión, 0=revisado y correcto |
+| last_review | DATETIME | NULLABLE, INDEX | Última vez que la entidad fue revisada manualmente |
 | trend | INTEGER | NOT NULL, DEFAULT 0 | Score de tendencia (-100 a 100) |
 | created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Fecha de creación |
 | updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
+
+**Valores de `classified_as`** (clasificación para desambiguación):
+- `canonical`: Entidad principal/verdadera (default)
+- `alias`: Variante o alias de otra entidad canónica
+- `ambiguous`: Entidad ambigua que puede referirse a múltiples entidades canónicas
+- `not_an_entity`: Falso positivo de NER (no es realmente una entidad)
 
 **Valores de `entity_type`** (basados en etiquetas NER de spaCy):
 - `person`: Personas, incluyendo ficticias
@@ -145,9 +155,13 @@ Entidades nombradas extraídas de artículos mediante NER (Named Entity Recognit
 - `cardinal`: Numerales que no caen en otro tipo
 
 **Campos clave**:
+- `detected_types`: Lista JSON de todos los tipos que spaCy ha detectado para esta entidad (útil para identificar inconsistencias)
+- `classified_as`: Clasificación para desambiguación (canonical/alias/ambiguous/not_an_entity)
 - `article_count`: Número de artículos que mencionan esta entidad (actualizado durante reranking)
 - `avg_local_relevance`: Promedio de relevancia local en todos los artículos donde aparece
 - `diversity`: Número de entidades únicas con las que co-ocurre (mide conectividad en el grafo)
+- `needs_review`: Flag para revisión manual (1=necesita revisión, 0=ya revisado)
+- `last_review`: Timestamp de última revisión manual
 - `pagerank`: Score de PageRank sin normalizar
   - Distribución de probabilidad (suma total ≈ 1.0)
   - Usado para warm start en futuros cálculos
@@ -261,6 +275,8 @@ Tabla de asociación para la relación muchos-a-muchos entre artículos y entida
 | entity_id | INTEGER | FOREIGN KEY, PRIMARY KEY | ID de la entidad |
 | mentions | INTEGER | NOT NULL, DEFAULT 1 | Número de menciones en el artículo |
 | relevance | FLOAT | NOT NULL, DEFAULT 0.0, INDEX | Score de relevancia para este par artículo-entidad |
+| origin | ENUM | NOT NULL, DEFAULT 'ner' | Origen de la entidad: 'ner' (detectada) o 'classification' (agregada) |
+| context_sentences | JSON | NULLABLE | Lista de oraciones donde se encontró la entidad |
 
 **Restricciones**:
 - PK compuesta: `(article_id, entity_id)`
@@ -279,10 +295,69 @@ Tabla de asociación para la relación muchos-a-muchos entre artículos y entida
     - +10% por cada mención adicional más allá de 3 (cap en +50%)
   - **Normalización**: El score se normaliza para que la entidad más relevante del artículo tenga 1.0
 
+**Campos adicionales desde el commit de desambiguación**:
+- `origin`: Distingue entre entidades detectadas por NER vs agregadas por clasificación
+  - `ner`: Detectada originalmente por spaCy
+  - `classification`: Agregada automáticamente por el sistema de clasificación (ej: canonical de un alias)
+- `context_sentences`: Oraciones donde aparece la entidad (útil para revisión manual)
+
 **Índices**:
 - `article_id`: Para buscar todas las entidades de un artículo
+- `(article_id, origin)` compuesto: Para recalculación eficiente (filtrar solo NER)
 - `entity_id`: Para buscar todos los artículos que mencionan una entidad
 - `relevance`: Para ordenar por relevancia
+
+### Tabla: `entity_canonical_refs`
+
+Tabla de asociación many-to-many para referencias canónicas entre entidades (desambiguación).
+
+| Campo | Tipo | Restricciones | Descripción |
+|-------|------|---------------|-------------|
+| entity_id | INTEGER | FOREIGN KEY, PRIMARY KEY | ID de la entidad (alias/ambiguous) |
+| canonical_id | INTEGER | FOREIGN KEY, PRIMARY KEY | ID de la entidad canónica |
+
+**Propósito**: Relaciona entidades ALIAS y AMBIGUOUS con sus entidades canónicas.
+
+**Ejemplos de uso**:
+- ALIAS: "Luis" → "Luis Abinader" (1 canonical_ref)
+- AMBIGUOUS: "Luis" → ["Luis Abinader", "Luis Fonsi"] (2+ canonical_refs)
+
+**Restricciones**:
+- PK compuesta: `(entity_id, canonical_id)` (evita duplicados)
+- `entity_id` ON DELETE CASCADE (si se elimina la entidad, se eliminan sus referencias)
+- `canonical_id` ON DELETE RESTRICT (no se puede eliminar canonical si tiene referencias)
+
+**Índices**:
+- `entity_id`: Para buscar canonicals de una entidad
+- `canonical_id`: Para buscar qué entidades apuntan a una canonical
+
+**Relaciones**:
+- N:M entre `named_entities` (self-join)
+
+### Tabla: `articles_needs_rerank`
+
+Tabla de tracking para artículos que necesitan recalcular relevancia local tras cambios de clasificación.
+
+| Campo | Tipo | Restricciones | Descripción |
+|-------|------|---------------|-------------|
+| article_id | INTEGER | FOREIGN KEY, PRIMARY KEY | ID del artículo que necesita recálculo |
+| created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Cuándo se marcó para recálculo |
+
+**Propósito**: Cuando clasificas una entidad (ej: marcas "Luis" como ALIAS de "Luis Abinader"), todos los artículos que mencionan "Luis" se marcan aquí para recalcular su relevancia local.
+
+**Flujo**:
+1. Usuario clasifica entidad con `news entity classify-*`
+2. Sistema marca automáticamente todos los artículos afectados en esta tabla
+3. Usuario ejecuta `news entity recalculate-local` para procesar
+4. Sistema recalcula relevancia y limpia registros procesados
+
+**Restricciones**:
+- PK: `article_id` (un artículo solo se marca una vez)
+- `article_id` ON DELETE CASCADE (si se elimina el artículo, se elimina el tracking)
+
+**Índices**:
+- `article_id`: PK (búsqueda rápida)
+- `created_at`: Para ordenar por antigüedad
 
 ### Tabla: `article_tags`
 

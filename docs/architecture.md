@@ -49,12 +49,20 @@ tags (M:N articles via article_tags)
 article_tags (tabla de asociación)
   ├─ article_id, tag_id
 
-named_entities (M:N articles via article_entities)
-  ├─ id, name (unique), entity_type, description, photo_url
-  ├─ article_count, trend, created_at, updated_at
+named_entities (M:N articles via article_entities, M:N canonical refs via entity_canonical_refs)
+  ├─ id, name (unique), entity_type, detected_types, classified_as
+  ├─ description, photo_url, article_count, avg_local_relevance, diversity
+  ├─ pagerank, global_relevance, last_rank_calculated_at
+  ├─ needs_review, last_review, trend, created_at, updated_at
 
 article_entities (tabla de asociación con metadata)
-  ├─ article_id, entity_id, mentions, relevance
+  ├─ article_id, entity_id, mentions, relevance, origin, context_sentences
+
+entity_canonical_refs (tabla de asociación para desambiguación)
+  ├─ entity_id, canonical_id
+
+articles_needs_rerank (tabla de tracking)
+  ├─ article_id, created_at
 
 article_clusters (N:1 article, 1:1 flash_news)
   ├─ id, article_id, cluster_label, category, score, size

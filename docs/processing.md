@@ -531,6 +531,288 @@ print(result.campo1)
 
 ---
 
+## Sistema de Desambiguación de Entidades
+
+### Introducción
+
+El sistema de desambiguación resuelve el problema de entidades ambiguas en NER, donde el mismo texto puede referirse a múltiples personas/organizaciones diferentes. Por ejemplo:
+- **"Luis"** puede ser → Luis Abinader (presidente) o Luis Fonsi (cantante)
+- **"PRM"** puede ser → Partido Revolucionario Moderno o Performance Rights Management
+
+### Clasificaciones de Entidades
+
+Cada entidad en `named_entities` tiene un campo `classified_as` con uno de estos valores:
+
+#### 1. **CANONICAL** (default)
+Entidad principal o "verdadera".
+
+**Características**:
+- Es la entidad de referencia
+- No puede tener `canonical_refs` salientes (pero puede recibir referencias de otras entidades)
+- Acumula la relevancia de sus aliases y entidades ambiguas
+
+**Ejemplo**: "Luis Abinader", "Partido Revolucionario Moderno"
+
+#### 2. **ALIAS**
+Variante o alias de una entidad canónica.
+
+**Características**:
+- Debe tener **exactamente 1** `canonical_ref`
+- Su relevancia se **transfiere completamente** a la canónica
+- Útil para abreviaturas, apodos, variantes de escritura
+
+**Ejemplo**: "Luis" → alias de "Luis Abinader"
+
+**Transferencia de relevancia**:
+```
+Artículo menciona: "Luis" (relevancia 0.8)
+Sistema transfiere: "Luis Abinader" recibe +0.8 de relevancia
+```
+
+#### 3. **AMBIGUOUS**
+Entidad ambigua que puede referirse a múltiples entidades canónicas.
+
+**Características**:
+- Debe tener **mínimo 2** `canonical_refs`
+- Su relevancia se **divide equitativamente** entre las canónicas presentes en el artículo
+- El sistema intenta resolver automáticamente usando contexto
+
+**Ejemplo**: "Luis" → puede ser "Luis Abinader" o "Luis Fonsi"
+
+**División de relevancia**:
+```
+Artículo menciona: "Luis" (relevancia 0.6), "el presidente" (alias de Luis Abinader)
+Sistema detecta contexto: Solo Luis Abinader está presente
+Resultado: Luis Abinader recibe +0.6 (no se divide)
+```
+
+#### 4. **NOT_AN_ENTITY**
+Falso positivo de NER (no es realmente una entidad).
+
+**Características**:
+- No puede tener `canonical_refs`
+- Su relevancia siempre es **0.0** (ignorada completamente)
+- Útil para limpiar detecciones erróneas de spaCy
+
+**Ejemplo**: "Día" detectado como entidad pero es palabra común
+
+### Desambiguación Contextual Automática
+
+Cuando el sistema encuentra una entidad **AMBIGUOUS** en un artículo, intenta resolverla automáticamente:
+
+**Estrategia de resolución**:
+
+1. **Búsqueda directa**: ¿Se menciona la canónica explícitamente?
+   - Si el artículo menciona "Luis Abinader" → resuelto como "Luis Abinader"
+
+2. **Búsqueda por referencias**: ¿Hay otros alias que apuntan a esta canónica?
+   - Si el artículo menciona "el presidente" (ALIAS de "Luis Abinader") → resuelto como "Luis Abinader"
+
+3. **Si no se puede resolver**:
+   - Si tiene ≤ 10 canonicals → divide relevancia entre todas
+   - Si tiene > 10 canonicals → ignora completamente (evita dilución excesiva)
+
+**Límites de rendimiento**:
+```python
+MAX_CONTEXTUAL_RESOLUTION_REFS = 10  # Máximo para intentar resolución contextual
+MAX_AMBIGUITY_THRESHOLD = 10  # Ignorar si tiene más de este número de canonicals
+```
+
+### Origen de Entidades (EntityOrigin)
+
+El campo `article_entities.origin` distingue cómo llegó la entidad al artículo:
+
+- **`NER`**: Detectada originalmente por spaCy en el contenido
+- **`CLASSIFICATION`**: Agregada automáticamente por el sistema de clasificación
+
+**Ejemplo**:
+```
+Artículo original (NER): "Luis" (3 menciones)
+Clasificas: "Luis" como ALIAS de "Luis Abinader"
+Sistema agrega artificialmente: "Luis Abinader" con origin=CLASSIFICATION
+```
+
+**Protección contra duplicación**: Si "Luis Abinader" ya fue detectado por NER, NO se agrega artificialmente otra vez (evita duplicar link juice).
+
+### Comandos de Clasificación
+
+#### Listar entidades pendientes de revisión
+```bash
+uv run news entity list --needs-review
+```
+
+#### Revisar entidad específica
+```bash
+uv run news entity review <entity_id>
+```
+
+Muestra contexto de la entidad y opciones interactivas para clasificar.
+
+#### Clasificar como CANONICAL
+```bash
+uv run news entity classify-canonical <entity_id>
+```
+
+#### Clasificar como ALIAS
+```bash
+uv run news entity classify-alias <entity_id> <canonical_id>
+```
+
+**Ejemplo**:
+```bash
+# "Luis" (ID: 123) es alias de "Luis Abinader" (ID: 45)
+uv run news entity classify-alias 123 45
+```
+
+#### Clasificar como AMBIGUOUS
+```bash
+uv run news entity classify-ambiguous <entity_id> <canonical_id_1> <canonical_id_2> [...]
+```
+
+**Ejemplo**:
+```bash
+# "Luis" puede ser Luis Abinader (45) o Luis Fonsi (67)
+uv run news entity classify-ambiguous 123 45 67
+```
+
+#### Clasificar como NOT_AN_ENTITY
+```bash
+uv run news entity classify-not-entity <entity_id>
+```
+
+### Recalculación de Relevancia Local
+
+Después de clasificar entidades, **debes recalcular** la relevancia local de los artículos afectados:
+
+```bash
+# Recalcular todos los artículos marcados
+uv run news entity recalculate-local
+
+# Recalcular con límite
+uv run news entity recalculate-local --limit 100
+
+# Recalcular artículo específico
+uv run news entity recalculate-local --article-id 456
+```
+
+**Proceso interno**:
+1. Lee artículos de `articles_needs_rerank`
+2. Para cada artículo:
+   - Carga entidades originales (filtra por `origin=NER`)
+   - Borra todas las relaciones `article_entities`
+   - Recalcula relevancia con clasificaciones actuales
+   - Inserta nuevas relevances con `origin` flags
+3. Limpia artículos procesados de `articles_needs_rerank`
+
+**Stats mostradas**:
+- Articles processed/failed
+- Total entities
+- Entities ignored (ALIAS/AMBIGUOUS/NOT_AN_ENTITY)
+- Entities artificial (from classifications)
+
+### Tabla de Tracking
+
+**`articles_needs_rerank`**: Artículos que necesitan recálculo.
+
+Cuando clasificas una entidad, el sistema **automáticamente** marca todos los artículos que la mencionan:
+
+```python
+# Método interno llamado por todos los set_as_*()
+def _mark_articles_for_rerank(self, session):
+    # Inserta en articles_needs_rerank todos los artículos
+    # que contienen esta entidad
+```
+
+### Métodos Helper del Modelo
+
+**IMPORTANTE**: Los cambios de clasificación **deben hacerse** mediante estos métodos (no directamente):
+
+```python
+# En src/db/models.py clase NamedEntity
+
+entity.set_as_canonical(session)
+entity.set_as_alias(canonical_entity, session)
+entity.set_as_ambiguous([canonical1, canonical2], session)
+entity.set_as_not_entity(session)
+```
+
+**Estos métodos garantizan**:
+- Validación de restricciones (conteo de canonical_refs)
+- Limpieza de relaciones existentes
+- Marcado automático de artículos para rerank
+- Consistencia de datos
+
+### Flujo Completo de Desambiguación
+
+**Ejemplo real**: Desambiguar "Luis"
+
+```bash
+# 1. Identificar entidad ambigua
+uv run news entity search "Luis"
+
+# Output:
+# ID: 123 | Name: Luis | Type: PERSON | Articles: 45
+
+# 2. Buscar candidatos canónicos
+uv run news entity search "Luis Abinader"
+uv run news entity search "Luis Fonsi"
+
+# Output:
+# ID: 45 | Name: Luis Abinader | Type: PERSON | Articles: 120
+# ID: 67 | Name: Luis Fonsi | Type: PERSON | Articles: 8
+
+# 3. Clasificar como AMBIGUOUS
+uv run news entity classify-ambiguous 123 45 67
+
+# Output:
+# ✓ Marked 'Luis' as AMBIGUOUS with 2 canonical references
+# ✓ 45 articles marked for local relevance recalculation
+
+# 4. Recalcular relevancia local
+uv run news entity recalculate-local --limit 50
+
+# Output:
+# 🔄 Recalculating local entity relevance...
+# 📊 Found 45 articles to process
+# ...
+# ✅ Recalculation complete!
+#    • Articles processed: 45
+#    • Entities artificial: 67 (from AMBIGUOUS resolution)
+
+# 5. Recalcular relevancia global (PageRank)
+uv run news entity rerank
+
+# 6. Verificar resultados
+uv run news entity show "Luis Abinader"
+uv run news entity show "Luis Fonsi"
+```
+
+### Validación de Consistencia
+
+Verificar manualmente la consistencia de una entidad:
+
+```python
+from db import Database, NamedEntity
+
+db = Database()
+session = db.get_session()
+
+entity = session.query(NamedEntity).filter_by(id=123).first()
+is_valid, errors = entity.validate_classification(session)
+
+if not is_valid:
+    for error in errors:
+        print(f"ERROR: {error}")
+```
+
+**Restricciones validadas**:
+- CANONICAL: 0 canonical_refs salientes
+- ALIAS: Exactamente 1 canonical_ref
+- AMBIGUOUS: Mínimo 2 canonical_refs
+- NOT_AN_ENTITY: 0 canonical_refs
+
+---
+
 ## Relevancia Global de Entidades (PageRank)
 
 ### Concepto

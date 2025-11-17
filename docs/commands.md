@@ -357,6 +357,148 @@ uv run news entity search "Policía" --limit 5
 - Relevancia global
 - Número de artículos donde aparece
 
+### `news entity rerank`
+
+Calcula relevancia global (PageRank) de entidades basado en co-ocurrencias.
+
+**Opciones:**
+- `--domain TEXT`: Filtrar artículos por dominio (testing)
+- `--damping FLOAT`: Factor de amortiguación (default: 0.85)
+- `--threshold FLOAT`: Umbral mínimo de relevancia (default: 0.3)
+- `--time-decay INT`: Decay temporal en días (opcional)
+- `--show-stats`: Mostrar estadísticas detalladas
+
+**Ejemplos:**
+```bash
+# Calcular ranking global
+uv run news entity rerank
+
+# Solo artículos de un dominio
+uv run news entity rerank --domain diariolibre.com
+
+# Ajustar parámetros
+uv run news entity rerank --damping 0.9 --threshold 0.4
+
+# Con estadísticas
+uv run news entity rerank --show-stats
+```
+
+### `news entity review <entity_id>`
+
+Inicia revisión interactiva de una entidad para clasificación.
+
+**Ejemplo:**
+```bash
+uv run news entity review 123
+```
+
+**Información mostrada:**
+- Metadatos de la entidad (ID, nombre, tipo, clasificación actual)
+- Referencias canónicas (si las tiene)
+- Artículos donde aparece (top 5)
+- Oraciones de contexto donde fue detectada
+- Opciones interactivas para clasificar
+
+### `news entity classify-canonical <entity_id>`
+
+Marca una entidad como CANONICAL (entidad principal/verdadera).
+
+**Ejemplo:**
+```bash
+uv run news entity classify-canonical 45
+```
+
+### `news entity classify-alias <entity_id> <canonical_id>`
+
+Marca una entidad como ALIAS de otra entidad canónica.
+
+**Parámetros:**
+- `entity_id`: ID de la entidad a clasificar como alias
+- `canonical_id`: ID de la entidad canónica a la que apunta
+
+**Ejemplo:**
+```bash
+# "Luis" (ID: 123) es alias de "Luis Abinader" (ID: 45)
+uv run news entity classify-alias 123 45
+```
+
+**Efecto:**
+- La entidad se marca como ALIAS
+- Se crea relación en `entity_canonical_refs`
+- Se marcan artículos para recálculo en `articles_needs_rerank`
+- La relevancia del alias se transferirá a la canónica tras recalcular
+
+### `news entity classify-ambiguous <entity_id> <canonical_id_1> <canonical_id_2> [...]`
+
+Marca una entidad como AMBIGUOUS (puede referirse a múltiples entidades canónicas).
+
+**Parámetros:**
+- `entity_id`: ID de la entidad ambigua
+- `canonical_id_1, canonical_id_2, ...`: IDs de las entidades canónicas (mínimo 2)
+
+**Ejemplo:**
+```bash
+# "Luis" puede ser Luis Abinader (45) o Luis Fonsi (67)
+uv run news entity classify-ambiguous 123 45 67
+```
+
+**Efecto:**
+- La entidad se marca como AMBIGUOUS
+- Se crean múltiples relaciones en `entity_canonical_refs`
+- Se marcan artículos para recálculo
+- La relevancia se dividirá entre las canónicas presentes tras recalcular
+
+### `news entity classify-not-entity <entity_id>`
+
+Marca una entidad como NOT_AN_ENTITY (falso positivo de NER).
+
+**Ejemplo:**
+```bash
+# "Día" fue detectado erróneamente como entidad
+uv run news entity classify-not-entity 234
+```
+
+**Efecto:**
+- La entidad se marca como NOT_AN_ENTITY
+- Se limpian todas sus referencias canónicas
+- Se marcan artículos para recálculo
+- Su relevancia será 0.0 tras recalcular (ignorada completamente)
+
+### `news entity recalculate-local`
+
+Recalcula relevancia local de artículos tras cambios de clasificación.
+
+**Opciones:**
+- `-l, --limit`: Procesar solo N artículos
+- `-a, --article-id`: Recalcular solo un artículo específico
+
+**Ejemplos:**
+```bash
+# Recalcular todos los artículos marcados
+uv run news entity recalculate-local
+
+# Recalcular con límite
+uv run news entity recalculate-local --limit 100
+
+# Recalcular artículo específico
+uv run news entity recalculate-local --article-id 456
+```
+
+**Proceso:**
+1. Lee artículos de `articles_needs_rerank`
+2. Para cada artículo:
+   - Carga entidades originales (solo `origin=NER`)
+   - Borra relaciones `article_entities`
+   - Recalcula relevancia con clasificaciones actuales
+   - Inserta nuevas relevances con flags de origen
+3. Limpia artículos procesados
+
+**Información mostrada:**
+- Artículos procesados/fallidos
+- Total de entidades procesadas
+- Entidades ignoradas (ALIAS/AMBIGUOUS/NOT_AN_ENTITY)
+- Entidades artificiales (agregadas por clasificación)
+
 ---
 
 ## Tipos de Entidades
@@ -434,6 +576,47 @@ uv run news entity search "Luis"
 
 # 5. Ver artículo con sus entidades
 uv run news article show 1 --entities
+```
+
+### Clasificar y desambiguar entidades
+
+```bash
+# 1. Buscar entidad ambigua
+uv run news entity search "Luis"
+
+# Output: ID: 123 | Name: Luis | Type: PERSON | Articles: 45
+
+# 2. Buscar candidatos canónicos
+uv run news entity search "Luis Abinader"
+uv run news entity search "Luis Fonsi"
+
+# Output:
+# ID: 45 | Name: Luis Abinader | Type: PERSON | Articles: 120
+# ID: 67 | Name: Luis Fonsi | Type: PERSON | Articles: 8
+
+# 3. Revisar contexto de la entidad
+uv run news entity review 123
+
+# 4. Clasificar según corresponda:
+
+# Opción A: Es alias de una sola entidad
+uv run news entity classify-alias 123 45
+
+# Opción B: Es ambigua (puede ser varias)
+uv run news entity classify-ambiguous 123 45 67
+
+# Opción C: Es falso positivo
+uv run news entity classify-not-entity 123
+
+# 5. Recalcular relevancia local de artículos afectados
+uv run news entity recalculate-local
+
+# 6. Recalcular relevancia global (PageRank)
+uv run news entity rerank
+
+# 7. Verificar resultados
+uv run news entity show "Luis Abinader"
+uv run news entity show "Luis Fonsi"
 ```
 
 ### Monitorear procesamiento
