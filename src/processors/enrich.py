@@ -5,10 +5,16 @@ Includes Named Entity Recognition (NER) using spaCy and semantic sentence cluste
 
 import spacy
 from datetime import datetime
-from sqlalchemy import insert, update
-from db import ProcessingBatch, BatchItem, Article, NamedEntity, EntityType, ArticleCluster, ArticleSentence, ClusterCategory, FlashNews
+from sqlalchemy import insert, update, delete
+from db import ProcessingBatch, BatchItem, Article, NamedEntity, EntityType, ArticleCluster, ArticleSentence, ClusterCategory, FlashNews, EntityClassification, EntityOrigin
 from db.models import article_entities
 from processors.clustering import extract_sentences, make_embeddings, cluster_article
+from collections import defaultdict
+
+
+# Configuration constants for ambiguous entity resolution
+MAX_AMBIGUITY_THRESHOLD = 10  # Entities with more than this many canonical refs are ignored if they couldn't be disambiguated
+MAX_CONTEXTUAL_RESOLUTION_REFS = 10  # Maximum canonical refs to attempt contextual resolution (should be <= MAX_AMBIGUITY_THRESHOLD)
 
 
 # Load spaCy model (Spanish)
@@ -143,6 +149,470 @@ def calculate_cluster_boost(entity_text, clusters_info, sentences):
         return 1.0
     else:
         return 0.7
+
+
+def resolve_ambiguous_entity_contextually(canonical_entities, article_content, detected_entities_names, session, max_ambiguity=MAX_CONTEXTUAL_RESOLUTION_REFS):
+    """
+    Resolve AMBIGUOUS entity by finding contextual clues in the article.
+
+    Args:
+        canonical_entities: List of NamedEntity objects this ambiguous entity points to
+        article_content: Article text content for substring search
+        detected_entities_names: Set of entity names detected by NER (for fast lookup)
+        session: SQLAlchemy session
+        max_ambiguity: Don't resolve if entity has more than this many canonical refs
+
+    Returns:
+        List of NamedEntity objects that are contextually relevant (subset of canonical_entities)
+        or None if no resolution was possible
+    """
+    # Don't resolve if too ambiguous (performance optimization)
+    if len(canonical_entities) > max_ambiguity:
+        return None
+
+    contextually_relevant = []
+    article_lower = article_content.lower()
+
+    for canonical_entity in canonical_entities:
+        # Case (a): Check if canonical entity name is mentioned directly in article
+        if canonical_entity.name.lower() in article_lower:
+            contextually_relevant.append(canonical_entity)
+            continue
+
+        # Case (b): Check if canonical entity is referenced by other entities in the article
+        # Find entities that point to this canonical (ALIAS or AMBIGUOUS)
+        referencing_entities = session.query(NamedEntity).join(
+            entity_canonical_refs,
+            NamedEntity.id == entity_canonical_refs.c.entity_id
+        ).filter(
+            entity_canonical_refs.c.canonical_id == canonical_entity.id
+        ).all()
+
+        for ref_entity in referencing_entities:
+            # First check detected entities (fast)
+            if ref_entity.name in detected_entities_names:
+                contextually_relevant.append(canonical_entity)
+                break
+
+            # Then check substring in article (slower)
+            if ref_entity.name.lower() in article_lower:
+                contextually_relevant.append(canonical_entity)
+                break
+
+    # Only return if we found at least one contextual match
+    # Otherwise return None to indicate "no resolution found, use default behavior"
+    return contextually_relevant if contextually_relevant else None
+
+
+def calculate_local_relevance_with_classification(
+    article,
+    entity_counts,
+    entity_contexts,
+    entities_original,
+    clusters_info,
+    sentences,
+    session
+):
+    """
+    Calculate local relevance considering entity classifications.
+
+    Handles CANONICAL, ALIAS, AMBIGUOUS, and NOT_AN_ENTITY classifications.
+
+    Args:
+        article: Article object
+        entity_counts: Dict mapping entity_text -> mention_count
+        entity_contexts: Dict mapping entity_text -> [sentences]
+        entities_original: List of (entity_text, entity_type) tuples from NER
+        clusters_info: Cluster data for boost calculation
+        sentences: List of sentence strings
+        session: SQLAlchemy session
+
+    Returns:
+        List of dicts with keys: entity_id, entity_name, mentions, relevance, origin, is_new, context_sentences
+    """
+    # Total mentions for normalization
+    total_mentions = sum(entity_counts.values())
+
+    # Structure to hold entity data: entity_text -> {entity_obj, mention_count, raw_relevance, cluster_boost, should_ignore, origin, is_new}
+    entity_data = {}
+
+    # Additional entities to add (from classifications)
+    additional_entities = []  # List of (canonical_entity_obj, mention_count, raw_relevance, cluster_boost, origin)
+
+    # ========== STEP 1: Process original entities from NER ==========
+    for entity_text, mention_count in entity_counts.items():
+        # Find entity type from original NER extraction
+        entity_type = next((et for et, _ in [(e[1], e[0]) for e in entities_original if e[0] == entity_text]), None)
+        if not entity_type:
+            continue
+
+        # Get or create entity
+        entity = session.query(NamedEntity).filter_by(name=entity_text).first()
+        is_new = False  # Track if this is a new entity
+
+        if not entity:
+            # Create new entity
+            entity = NamedEntity(
+                name=entity_text,
+                entity_type=entity_type,
+                detected_types=[entity_type.value],
+                article_count=1,
+                needs_review=1,
+                trend=0
+            )
+            session.add(entity)
+            session.flush()
+            is_new = True  # Mark as new
+        else:
+            # Update existing entity
+            entity.article_count += 1
+
+            # Update detected_types if needed
+            if entity.detected_types is None:
+                entity.detected_types = [entity_type.value]
+                entity.needs_review = 1
+            elif entity_type.value not in entity.detected_types:
+                entity.detected_types = entity.detected_types + [entity_type.value]
+                entity.needs_review = 1
+
+        # Calculate raw relevance
+        raw_relevance = calculate_entity_relevance(article, entity_text, mention_count, total_mentions)
+
+        # Calculate cluster boost
+        cluster_boost = 1.0
+        if clusters_info:
+            cluster_boost = calculate_cluster_boost(entity_text, clusters_info, sentences)
+
+        # Determine how to handle based on classification
+        should_ignore = False
+        origin = EntityOrigin.NER
+
+        if entity.classified_as == EntityClassification.CANONICAL:
+            # Normal entity, include in calculation
+            pass
+
+        elif entity.classified_as == EntityClassification.ALIAS:
+            # Mark for ignore, add canonical instead
+            should_ignore = True
+            canonical_entities = entity.canonical_refs if entity.canonical_refs else []
+
+            if len(canonical_entities) == 1:
+                canonical_entity = canonical_entities[0]
+                # Only add canonical if not already detected by NER in this article
+                if canonical_entity.name not in entity_data:
+                    additional_entities.append((
+                        canonical_entity,
+                        mention_count,
+                        raw_relevance,
+                        cluster_boost,
+                        EntityOrigin.CLASSIFICATION
+                    ))
+                # If canonical already exists, the alias relevance will transfer to it automatically
+            else:
+                # WARNING: Inconsistent DB state - ALIAS must have exactly 1 canonical
+                print(f"⚠️  WARNING: ALIAS entity '{entity.name}' (ID: {entity.id}) has {len(canonical_entities)} canonical_refs (expected 1). Entity will be ignored.")
+                # Entity remains as should_ignore=True, relevance=0
+
+        elif entity.classified_as == EntityClassification.AMBIGUOUS:
+            # Mark for ignore
+            should_ignore = True
+
+            # Get canonical entities this ambiguous entity points to
+            canonical_entities = entity.canonical_refs if entity.canonical_refs else []
+
+            if len(canonical_entities) < 2:
+                # WARNING: Inconsistent DB state - AMBIGUOUS requires minimum 2 canonical entities
+                print(f"⚠️  WARNING: AMBIGUOUS entity '{entity.name}' (ID: {entity.id}) has {len(canonical_entities)} canonical_refs (minimum 2 required). Entity will be ignored.")
+                # Entity remains as should_ignore=True, relevance=0
+            else:
+                # Check if any canonical was already detected by NER in this article
+                detected_canonicals = [ce for ce in canonical_entities if ce.name in entity_data]
+
+                if detected_canonicals:
+                    # At least one canonical was detected by NER - only use those
+                    # This prevents diluting relevance among unmentioned entities
+                    # The ambiguous entity's relevance will be divided only among detected canonicals
+                    pass  # detected_canonicals will be used in STEP 6 for division
+                else:
+                    # No canonical was detected by NER - try contextual resolution
+                    detected_entities_names = set(entity_data.keys())
+                    contextually_resolved = resolve_ambiguous_entity_contextually(
+                        canonical_entities=canonical_entities,
+                        article_content=article.content,
+                        detected_entities_names=detected_entities_names,
+                        session=session,
+                        max_ambiguity=MAX_CONTEXTUAL_RESOLUTION_REFS
+                    )
+
+                    if contextually_resolved:
+                        # Contextual resolution found specific canonicals - use only those
+                        for canonical_entity in contextually_resolved:
+                            if canonical_entity.name not in entity_data:
+                                additional_entities.append((
+                                    canonical_entity,
+                                    mention_count,
+                                    raw_relevance,
+                                    cluster_boost,
+                                    EntityOrigin.CLASSIFICATION
+                                ))
+                    else:
+                        # No contextual resolution possible - check if too ambiguous
+                        if len(canonical_entities) > MAX_AMBIGUITY_THRESHOLD:
+                            # Too ambiguous and couldn't resolve - ignore to avoid diluting relevance
+                            print(f"⚠️  WARNING: AMBIGUOUS entity '{entity.name}' (ID: {entity.id}) has {len(canonical_entities)} canonical_refs (threshold: {MAX_AMBIGUITY_THRESHOLD}) and couldn't be contextually resolved. Entity will be ignored.")
+                            # Entity remains as should_ignore=True, relevance=0
+                        else:
+                            # Manageable ambiguity - add all canonicals as candidates
+                            for canonical_entity in canonical_entities:
+                                if canonical_entity.name not in entity_data:
+                                    additional_entities.append((
+                                        canonical_entity,
+                                        mention_count,
+                                        raw_relevance,
+                                        cluster_boost,
+                                        EntityOrigin.CLASSIFICATION
+                                    ))
+
+        elif entity.classified_as == EntityClassification.NOT_AN_ENTITY:
+            # False positive, ignore completely
+            should_ignore = True
+
+        # Store entity data
+        entity_data[entity_text] = {
+            'entity': entity,
+            'mention_count': mention_count,
+            'raw_relevance': raw_relevance,
+            'cluster_boost': cluster_boost,
+            'should_ignore': should_ignore,
+            'origin': origin,
+            'is_new': is_new
+        }
+
+    # ========== STEP 2: Add additional canonical entities ==========
+    for canonical_entity, mention_count, raw_relevance, cluster_boost, origin in additional_entities:
+        if canonical_entity.name not in entity_data:
+            # For AMBIGUOUS->canonical: mark as should_ignore since relevance will be divided later
+            should_ignore_canonical = (origin == EntityOrigin.CLASSIFICATION)  # Classification canonicals are marked to ignore
+
+            entity_data[canonical_entity.name] = {
+                'entity': canonical_entity,
+                'mention_count': mention_count,
+                'raw_relevance': raw_relevance,
+                'cluster_boost': cluster_boost,
+                'should_ignore': should_ignore_canonical,
+                'origin': origin,
+                'is_new': False  # Classification entities are never "new" from NER perspective
+            }
+
+    # ========== STEP 3: Calculate boosted relevances (only for non-ignored) ==========
+    entities_for_normalization = []
+
+    for entity_text, data in entity_data.items():
+        if not data['should_ignore']:
+            boosted_relevance = data['raw_relevance'] * data['cluster_boost']
+            entities_for_normalization.append((entity_text, boosted_relevance))
+
+    # ========== STEP 4: Normalization ==========
+    normalization_factor = 1.0
+    if entities_for_normalization:
+        max_relevance = max(rel for _, rel in entities_for_normalization)
+        if max_relevance > 0:
+            normalization_factor = 1.0 / max_relevance
+
+    # ========== STEP 5: Apply normalization and handle AMBIGUOUS divisions ==========
+    final_relevances = []  # List of dicts ready for insertion
+
+    for entity_text, data in entity_data.items():
+        entity = data['entity']
+        boosted_relevance = data['raw_relevance'] * data['cluster_boost']
+
+        # If ignored, set relevance to 0
+        if data['should_ignore']:
+            final_relevance = 0.0
+        else:
+            final_relevance = boosted_relevance * normalization_factor
+
+        # Get context sentences
+        contexts = entity_contexts.get(entity_text, [])
+
+        final_relevances.append({
+            'entity_id': entity.id,
+            'entity_name': entity.name,
+            'mentions': data['mention_count'],
+            'relevance': final_relevance,
+            'origin': data['origin'],
+            'is_new': data['is_new'],
+            'context_sentences': contexts
+        })
+
+    # ========== STEP 6: Transfer ALIAS/AMBIGUOUS relevance to canonicals ==========
+    for entity_text, data in entity_data.items():
+        entity = data['entity']
+
+        if entity.classified_as == EntityClassification.ALIAS:
+            # Transfer alias relevance to its canonical entity
+            alias_relevance = data['raw_relevance'] * data['cluster_boost'] * normalization_factor
+            canonical_entities = entity.canonical_refs if entity.canonical_refs else []
+
+            if len(canonical_entities) == 1:
+                canonical_entity = canonical_entities[0]
+                # Find canonical in final_relevances and add alias relevance
+                for item in final_relevances:
+                    if item['entity_id'] == canonical_entity.id:
+                        item['relevance'] += alias_relevance
+                        break
+
+        elif entity.classified_as == EntityClassification.AMBIGUOUS:
+            # Get the ambiguous entity's boosted relevance
+            ambiguous_relevance = data['raw_relevance'] * data['cluster_boost'] * normalization_factor
+
+            # Get all canonical refs
+            all_canonical_entities = entity.canonical_refs if entity.canonical_refs else []
+
+            # Find which canonicals are actually present in this article (detected by NER or added)
+            present_canonicals = []
+            for canonical_entity in all_canonical_entities:
+                for item in final_relevances:
+                    if item['entity_id'] == canonical_entity.id:
+                        present_canonicals.append(canonical_entity)
+                        break
+
+            # Divide ambiguous relevance only among present canonicals
+            if present_canonicals:
+                divided_relevance = ambiguous_relevance / len(present_canonicals)
+
+                # Add divided relevance to each present canonical entity
+                for canonical_entity in present_canonicals:
+                    for item in final_relevances:
+                        if item['entity_id'] == canonical_entity.id:
+                            item['relevance'] += divided_relevance
+                            break
+
+    return final_relevances
+
+
+def recalculate_article_relevance(article_id, session):
+    """
+    Recalculate local relevance for a single article based on current entity classifications.
+
+    This function:
+    1. Loads existing entities for the article (from original NER)
+    2. Deletes all article_entities entries for this article
+    3. Recalculates relevance using current classifications
+    4. Saves new relevances with origin flags
+
+    Args:
+        article_id: Article ID to recalculate
+        session: SQLAlchemy session
+
+    Returns:
+        Dict with statistics: entities_processed, entities_ignored, entities_classification
+    """
+    # Load article
+    article = session.query(Article).filter_by(id=article_id).first()
+    if not article:
+        raise ValueError(f"Article {article_id} not found")
+
+    # Get existing entities for this article (before deletion)
+    existing_entities = session.query(
+        article_entities.c.entity_id,
+        article_entities.c.mentions,
+        article_entities.c.context_sentences
+    ).filter(
+        article_entities.c.article_id == article_id,
+        article_entities.c.origin == EntityOrigin.NER  # Only original NER entities
+    ).all()
+
+    # Build entity_counts and entity_contexts from existing data
+    entity_counts = {}
+    entity_contexts = {}
+    entities_original = []
+
+    for entity_id, mentions, contexts in existing_entities:
+        entity = session.query(NamedEntity).filter_by(id=entity_id).first()
+        if entity:
+            entity_counts[entity.name] = mentions
+            entity_contexts[entity.name] = contexts or []
+            entities_original.append((entity.name, entity.entity_type))
+
+    if not entity_counts:
+        # No entities to recalculate
+        return {
+            'entities_processed': 0,
+            'entities_ignored': 0,
+            'entities_classification': 0
+        }
+
+    # Load cluster info if available
+    clusters_info = []
+    sentences = []
+
+    if article.cluster_enriched_at:
+        # Load clusters and sentences
+        clusters = session.query(ArticleCluster).filter_by(article_id=article_id).all()
+
+        for cluster in clusters:
+            clusters_info.append({
+                'label': cluster.cluster_label,
+                'category': cluster.category.value,
+                'score': cluster.score,
+                'size': cluster.size,
+                'indices': cluster.sentence_indices or []
+            })
+
+        # Load sentences
+        article_sentences = session.query(ArticleSentence).filter_by(article_id=article_id)\
+            .order_by(ArticleSentence.sentence_index).all()
+        sentences = [s.sentence_text for s in article_sentences]
+
+    # CRITICAL: Decrement article_count for NER entities before deletion
+    # This prevents article_count inflation on recalculation
+    for entity_id, mentions, contexts in existing_entities:
+        entity = session.query(NamedEntity).filter_by(id=entity_id).first()
+        if entity and entity.article_count > 0:
+            entity.article_count -= 1
+
+    # Delete all existing article_entities for this article
+    session.execute(
+        delete(article_entities).where(article_entities.c.article_id == article_id)
+    )
+
+    # Recalculate relevances with classifications
+    final_relevances = calculate_local_relevance_with_classification(
+        article=article,
+        entity_counts=entity_counts,
+        entity_contexts=entity_contexts,
+        entities_original=entities_original,
+        clusters_info=clusters_info,
+        sentences=sentences,
+        session=session
+    )
+
+    # Insert new relevances
+    stats = {
+        'entities_processed': len(final_relevances),
+        'entities_ignored': 0,
+        'entities_classification': 0
+    }
+
+    for data in final_relevances:
+        session.execute(
+            insert(article_entities).values(
+                article_id=article_id,
+                entity_id=data['entity_id'],
+                mentions=data['mentions'],
+                relevance=data['relevance'],
+                origin=data['origin'],
+                context_sentences=data['context_sentences']
+            )
+        )
+
+        if data['relevance'] == 0.0:
+            stats['entities_ignored'] += 1
+        if data['origin'] == EntityOrigin.CLASSIFICATION:
+            stats['entities_classification'] += 1
+
+    return stats
 
 
 def extract_entities(text):
@@ -365,7 +835,7 @@ def process_article(article, batch_item, session):
         stats['entities_found'] = len(entities)
         logs.append(f"Found {len(entities)} entities")
 
-        # Get or create entities and associate with article
+        # Count entity mentions
         entity_counts = {}
         for entity_text, entity_type in entities:
             # Skip if entity text is too short or just numbers
@@ -375,89 +845,54 @@ def process_article(article, batch_item, session):
             # Count entity mentions for this article
             entity_counts[entity_text] = entity_counts.get(entity_text, 0) + 1
 
-        # Calculate total mentions for relevance calculation
-        total_mentions = sum(entity_counts.values())
+        # ========== PHASE 3: CALCULATE RELEVANCES WITH CLASSIFICATIONS ==========
+        logs.append("Phase 3: Calculating relevances with entity classifications...")
 
-        # First pass: Calculate raw relevances and create/update entities
-        entity_relevances = []  # List of (entity_text, entity_id, mention_count, raw_relevance, cluster_boost)
+        # Use new unified relevance calculation function
+        final_relevances = calculate_local_relevance_with_classification(
+            article=article,
+            entity_counts=entity_counts,
+            entity_contexts=entity_contexts,
+            entities_original=entities,
+            clusters_info=clusters_info,
+            sentences=sentences,
+            session=session
+        )
 
-        for entity_text, mention_count in entity_counts.items():
-            # Find entity type from original entities list
-            entity_type = next((et for et, _ in [(e[1], e[0]) for e in entities if e[0] == entity_text]), None)
-            if not entity_type:
-                continue
+        # Track statistics
+        stats['entities_new'] = 0
+        stats['entities_existing'] = 0
+        stats['entities_classification'] = 0
 
-            # Get or create entity
-            entity = session.query(NamedEntity).filter_by(name=entity_text).first()
-            if not entity:
-                entity = NamedEntity(
-                    name=entity_text,
-                    entity_type=entity_type,
-                    detected_types=[entity_type.value],  # Initialize with first detected type
-                    article_count=1,  # First article mentioning this entity
-                    needs_review=1,  # New entities need review by default
-                    trend=0
-                )
-                session.add(entity)
-                session.flush()
-                stats['entities_new'] += 1
-                logs.append(f"Created new entity: {entity_text} ({entity_type.value})")
-            else:
-                # Update article count (increment for each article that mentions it)
-                entity.article_count += 1
-                stats['entities_existing'] += 1
+        # Insert relevances into article_entities
+        for data in final_relevances:
+            # Count new vs existing entities (only NER ones)
+            if data['origin'] == EntityOrigin.NER:  # Only count entities detected by NER
+                if data['is_new']:
+                    stats['entities_new'] += 1
+                else:
+                    stats['entities_existing'] += 1
 
-                # Update detected_types list if this type hasn't been seen before
-                if entity.detected_types is None:
-                    entity.detected_types = [entity_type.value]
-                    entity.needs_review = 1  # Inconsistent data, needs review
-                elif entity_type.value not in entity.detected_types:
-                    entity.detected_types = entity.detected_types + [entity_type.value]
-                    entity.needs_review = 1  # New type detected, needs review
-                    logs.append(f"  ⚠️  {entity_text}: New type '{entity_type.value}' detected (was: {entity.detected_types})")
+            # Track classification entities separately
+            if data['origin'] == EntityOrigin.CLASSIFICATION:
+                stats['entities_classification'] += 1
 
-            # Calculate raw relevance for this entity in this article
-            raw_relevance = calculate_entity_relevance(article, entity_text, mention_count, total_mentions)
+            # Insert into article_entities association table
+            stmt = insert(article_entities).values(
+                article_id=article.id,
+                entity_id=data['entity_id'],
+                mentions=data['mentions'],
+                relevance=data['relevance'],
+                origin=data['origin'],
+                context_sentences=data['context_sentences']
+            )
+            session.execute(stmt)
 
-            # ========== PHASE 2.1: APPLY CLUSTER BOOST ==========
-            cluster_boost = 1.0
-            if clusters_info:
-                cluster_boost = calculate_cluster_boost(entity_text, clusters_info, sentences)
-
-            entity_relevances.append((entity_text, entity.id, mention_count, raw_relevance, cluster_boost))
-
-        # ========== PHASE 3: NORMALIZATION ==========
-        # Normalize relevances so the most relevant entity has a score of 1.0
-        # (after applying cluster boost)
-        if entity_relevances:
-            # Apply cluster boost before normalization
-            boosted_relevances = [(et, eid, mc, rv * cb, cb) for et, eid, mc, rv, cb in entity_relevances]
-            max_relevance = max(rv for _, _, _, rv, _ in boosted_relevances)
-
-            if max_relevance > 0:
-                normalization_factor = 1.0 / max_relevance
-            else:
-                normalization_factor = 1.0  # All relevances are 0, no normalization needed
-
-            # Second pass: Insert with normalized relevances
-            for entity_text, entity_id, mention_count, boosted_relevance, cluster_boost in boosted_relevances:
-                normalized_relevance = boosted_relevance * normalization_factor
-
-                # Get context sentences for this entity
-                context_sentences = entity_contexts.get(entity_text, [])
-
-                # Insert into article_entities association table
-                stmt = insert(article_entities).values(
-                    article_id=article.id,
-                    entity_id=entity_id,
-                    mentions=mention_count,
-                    relevance=normalized_relevance,
-                    context_sentences=context_sentences
-                )
-                session.execute(stmt)
-
-                logs.append(f"  {entity_text}: {mention_count} mentions, "
-                           f"boost={cluster_boost:.1f}x, relevance={normalized_relevance:.4f}")
+            # Log entity processing
+            origin_flag = " [classification]" if data['origin'] == EntityOrigin.CLASSIFICATION else ""
+            ignored_flag = " [IGNORED]" if data['relevance'] == 0.0 else ""
+            logs.append(f"  {data['entity_name']}: {data['mentions']} mentions, "
+                       f"relevance={data['relevance']:.4f}{origin_flag}{ignored_flag}")
 
         # ========== PHASE 4: UPDATE DB RECORDS ==========
         # Mark article as enriched

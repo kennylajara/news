@@ -206,11 +206,15 @@ uv run news entity search "Luis"
 
 ## Roadmap
 
-- Cache DB (cache de artículos conocidos, util para re-indexación)
+- NER puede crear alias de nombres de personas y organizaciones automáticamente (nombres, apellidos e iniciales).
+- Distribución inteligente del link juice en entidades ambiguas (Luis es alias de Luis Fonsi y de Luis Abinader, Luis Fonsi no es agregado de forma artificial si ya Luis Abinader fue agregado por NER)
+- Forzar NER a detectar referencias aprobadas
+- Cache DB (cache de artículos conocidos, util para re-indexación); add flag --no-cache en fetch
 - Hacer que la IA pueda revisar hacer review de las entidades (con flag --auto-accept)
 - Calcular relevancia de las noticias antes de publicar
 - API REST para consulta de artículos
 - Frontend para visualización
+- Comentarios por entidades
 - Sistema de publicación automática
 - Descarga asíncrona con aiohttp
 - Auto-agregar punto final

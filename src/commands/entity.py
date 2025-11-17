@@ -5,9 +5,10 @@ Entity management commands.
 import click
 from datetime import datetime
 from db import Database, NamedEntity, Article, EntityType, EntityClassification
-from db.models import article_entities, entity_same_as
-from sqlalchemy import select, func
+from db.models import article_entities, entity_canonical_refs, articles_needs_rerank
+from sqlalchemy import select, func, delete
 from domain.calculate_global_relevance import calculate_global_relevance
+from processors.enrich import recalculate_article_relevance
 
 
 @click.group()
@@ -590,10 +591,8 @@ def review_start(entity_id, no_pager):
         output_lines.append(f"Classification: {entity.classified_as.value}")
         output_lines.append(f"Articles: {entity.article_count}")
 
-        if entity.alias_for_id:
-            alias_for = session.query(NamedEntity).filter_by(id=entity.alias_for_id).first()
-            if alias_for:
-                output_lines.append(f"Alias for: {alias_for.name} (ID: {alias_for.id})")
+        if entity.canonical_refs:
+            output_lines.append(f"Canonical references: {', '.join([f'{e.name} (ID: {e.id})' for e in entity.canonical_refs])}")
 
         if entity.description:
             output_lines.append(f"Description: {entity.description}")
@@ -914,6 +913,116 @@ def classify_not_entity(entity_id):
     except Exception as e:
         session.rollback()
         click.echo(click.style(f"✗ Error setting NOT_AN_ENTITY: {str(e)}", fg="red"))
+
+    finally:
+        session.close()
+
+
+@entity.command()
+@click.option('--limit', '-l', type=int, help='Process only N articles')
+@click.option('--article-id', '-a', type=int, help='Recalculate specific article only')
+def recalculate_local(limit, article_id):
+    """
+    Recalculate local relevance for articles marked for reranking.
+
+    This command processes articles where entity classifications have changed,
+    recalculating relevance scores based on current CANONICAL, ALIAS, AMBIGUOUS,
+    and NOT_AN_ENTITY classifications.
+
+    Examples:
+        news entity recalculate-local
+        news entity recalculate-local --limit 100
+        news entity recalculate-local --article-id 456
+    """
+    db = Database()
+    session = db.get_session()
+
+    try:
+        click.echo(click.style("🔄 Recalculating local entity relevance...\n", fg="cyan", bold=True))
+
+        if article_id:
+            # Recalculate specific article
+            article_ids = [(article_id,)]
+            total_count = 1
+        else:
+            # Get articles that need reranking
+            query = session.query(articles_needs_rerank.c.article_id)
+
+            if limit:
+                query = query.limit(limit)
+
+            article_ids = query.all()
+            total_count = len(article_ids)
+
+        if total_count == 0:
+            click.echo(click.style("✓ No articles need reranking!", fg="green"))
+            return
+
+        click.echo(f"📊 Found {click.style(str(total_count), fg='yellow')} articles to process\n")
+
+        # Process each article
+        total_stats = {
+            'articles_processed': 0,
+            'articles_failed': 0,
+            'entities_processed': 0,
+            'entities_ignored': 0,
+            'entities_artificial': 0
+        }
+
+        for (art_id,) in article_ids:
+            try:
+                # Recalculate relevance
+                stats = recalculate_article_relevance(art_id, session)
+                session.commit()
+
+                total_stats['articles_processed'] += 1
+                total_stats['entities_processed'] += stats['entities_processed']
+                total_stats['entities_ignored'] += stats['entities_ignored']
+                total_stats['entities_artificial'] += stats['entities_artificial']
+
+                # Show progress every 10 articles
+                if total_stats['articles_processed'] % 10 == 0:
+                    click.echo(f"  Processed {total_stats['articles_processed']}/{total_count} articles...")
+
+            except Exception as e:
+                session.rollback()
+                total_stats['articles_failed'] += 1
+                click.echo(click.style(f"  ✗ Failed article {art_id}: {str(e)}", fg="red"))
+
+        # Clear processed articles from needs_rerank table
+        if not article_id:
+            processed_ids = [art_id for (art_id,) in article_ids[:total_stats['articles_processed']]]
+            if processed_ids:
+                session.execute(
+                    delete(articles_needs_rerank).where(
+                        articles_needs_rerank.c.article_id.in_(processed_ids)
+                    )
+                )
+                session.commit()
+
+        # Display results
+        click.echo()
+        click.echo(click.style("✅ Recalculation complete!\n", fg="green", bold=True))
+
+        processed_str = click.style(str(total_stats['articles_processed']), fg='green')
+        failed_str = click.style(str(total_stats['articles_failed']), fg='red' if total_stats['articles_failed'] > 0 else 'green')
+
+        click.echo(f"   • Articles processed: {processed_str}")
+        click.echo(f"   • Articles failed: {failed_str}")
+        click.echo(f"   • Total entities: {click.style(str(total_stats['entities_processed']), fg='cyan')}")
+        click.echo(f"   • Ignored (ALIAS/AMBIGUOUS/NOT_AN_ENTITY): {click.style(str(total_stats['entities_ignored']), fg='yellow')}")
+        click.echo(f"   • Artificial (from classifications): {click.style(str(total_stats['entities_artificial']), fg='blue')}")
+
+        click.echo()
+        click.echo("💡 Next steps:")
+        click.echo("   • Review results: news entity list")
+        click.echo("   • Recalculate global relevance: news entity rerank")
+
+    except Exception as e:
+        session.rollback()
+        click.echo(click.style(f"✗ Error: {str(e)}", fg="red"))
+        import traceback
+        traceback.print_exc()
 
     finally:
         session.close()
