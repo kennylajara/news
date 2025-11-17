@@ -180,6 +180,41 @@ def show(name, limit, no_pager):
         output_lines.append(f"Created: {ent.created_at}")
         output_lines.append(f"Updated: {ent.updated_at}")
 
+        # Show group information
+        if ent.is_group:
+            output_lines.append(f"\n{click.style('Group Information:', bold=True)}")
+            from db import entity_group_members
+            # Get all members
+            members_query = session.query(NamedEntity).join(
+                entity_group_members,
+                NamedEntity.id == entity_group_members.c.member_id
+            ).filter(
+                entity_group_members.c.group_id == ent.id
+            ).distinct()
+            members = members_query.all()
+
+            if members:
+                output_lines.append(f"Members: {len(members)}")
+                output_lines.append("  Use 'news entity list-members {0}' to see details".format(ent.id))
+            else:
+                output_lines.append("Members: 0 (no members)")
+
+        # Show membership information
+        from db import entity_group_members
+        groups_query = session.query(NamedEntity).join(
+            entity_group_members,
+            NamedEntity.id == entity_group_members.c.group_id
+        ).filter(
+            entity_group_members.c.member_id == ent.id,
+            NamedEntity.is_group == 1
+        ).distinct()
+        groups = groups_query.all()
+
+        if groups:
+            output_lines.append(f"\n{click.style('Member of Groups:', bold=True)}")
+            for group in groups:
+                output_lines.append(f"  • {group.name} (ID: {group.id})")
+
         # Get articles that mention this entity
         stmt = select(
             Article.id,
@@ -593,6 +628,22 @@ def review_start(entity_id, no_pager):
 
         if entity.canonical_refs:
             output_lines.append(f"Canonical references: {', '.join([f'{e.name} (ID: {e.id})' for e in entity.canonical_refs])}")
+
+        # Show group information
+        if entity.is_group:
+            from db import entity_group_members
+            members_count = session.query(entity_group_members).filter(
+                entity_group_members.c.group_id == entity.id
+            ).count()
+            output_lines.append(f"Group: Yes ({members_count} member(s))")
+
+        # Show membership information
+        from db import entity_group_members
+        groups_count = session.query(entity_group_members).filter(
+            entity_group_members.c.member_id == entity.id
+        ).count()
+        if groups_count > 0:
+            output_lines.append(f"Member of {groups_count} group(s)")
 
         if entity.description:
             output_lines.append(f"Description: {entity.description}")
@@ -1020,6 +1071,324 @@ def recalculate_local(limit, article_id):
 
     except Exception as e:
         session.rollback()
+        click.echo(click.style(f"✗ Error: {str(e)}", fg="red"))
+        import traceback
+        traceback.print_exc()
+
+    finally:
+        session.close()
+
+
+@entity.command()
+@click.argument('entity_id', type=int)
+def set_group(entity_id):
+    """
+    Mark an entity as a group.
+
+    Only CANONICAL entities can be groups.
+
+    Example:
+        news entity set-group 100
+    """
+    db = Database()
+    session = db.get_session()
+
+    try:
+        # Get entity
+        entity = session.query(NamedEntity).filter_by(id=entity_id).first()
+
+        if not entity:
+            click.echo(click.style(f"✗ Entity with ID {entity_id} not found", fg="red"))
+            return
+
+        # Set as group
+        entity.set_as_group(session)
+        session.commit()
+
+        click.echo(click.style(f"✓ Marked '{entity.name}' (ID: {entity.id}) as a group", fg="green"))
+
+    except ValueError as e:
+        session.rollback()
+        click.echo(click.style(f"✗ Validation error: {str(e)}", fg="red"))
+    except Exception as e:
+        session.rollback()
+        click.echo(click.style(f"✗ Error: {str(e)}", fg="red"))
+
+    finally:
+        session.close()
+
+
+@entity.command()
+@click.argument('entity_id', type=int)
+def unset_group(entity_id):
+    """
+    Remove group flag from an entity.
+
+    The entity cannot have members.
+
+    Example:
+        news entity unset-group 100
+    """
+    db = Database()
+    session = db.get_session()
+
+    try:
+        # Get entity
+        entity = session.query(NamedEntity).filter_by(id=entity_id).first()
+
+        if not entity:
+            click.echo(click.style(f"✗ Entity with ID {entity_id} not found", fg="red"))
+            return
+
+        if not entity.is_group:
+            click.echo(click.style(f"✗ Entity '{entity.name}' is not a group", fg="yellow"))
+            return
+
+        # Unset as group
+        entity.unset_as_group(session)
+        session.commit()
+
+        click.echo(click.style(f"✓ Removed group flag from '{entity.name}' (ID: {entity.id})", fg="green"))
+
+    except ValueError as e:
+        session.rollback()
+        click.echo(click.style(f"✗ Validation error: {str(e)}", fg="red"))
+    except Exception as e:
+        session.rollback()
+        click.echo(click.style(f"✗ Error: {str(e)}", fg="red"))
+
+    finally:
+        session.close()
+
+
+@entity.command()
+@click.argument('group_id', type=int)
+@click.argument('member_id', type=int)
+@click.option('--role', type=str, help='Role within the group (e.g., "vocalist", "CEO")')
+@click.option('--since', type=str, help='Start date (YYYY-MM-DD format)')
+@click.option('--until', type=str, help='End date (YYYY-MM-DD format)')
+def add_member(group_id, member_id, role, since, until):
+    """
+    Add a member to a group.
+
+    Examples:
+        news entity add-member 100 101
+        news entity add-member 100 101 --role "vocalist"
+        news entity add-member 100 101 --since 1997-01-01 --until 2011-07-01
+    """
+    from datetime import datetime
+
+    db = Database()
+    session = db.get_session()
+
+    try:
+        # Get group
+        group = session.query(NamedEntity).filter_by(id=group_id).first()
+        if not group:
+            click.echo(click.style(f"✗ Group with ID {group_id} not found", fg="red"))
+            return
+
+        if not group.is_group:
+            click.echo(click.style(f"✗ Entity '{group.name}' is not a group. Use 'news entity set-group {group_id}' first.", fg="red"))
+            return
+
+        # Get member
+        member = session.query(NamedEntity).filter_by(id=member_id).first()
+        if not member:
+            click.echo(click.style(f"✗ Member with ID {member_id} not found", fg="red"))
+            return
+
+        # Parse dates
+        since_date = None
+        until_date = None
+
+        if since:
+            try:
+                since_date = datetime.strptime(since, '%Y-%m-%d')
+            except ValueError:
+                click.echo(click.style(f"✗ Invalid --since date format. Use YYYY-MM-DD", fg="red"))
+                return
+
+        if until:
+            try:
+                until_date = datetime.strptime(until, '%Y-%m-%d')
+            except ValueError:
+                click.echo(click.style(f"✗ Invalid --until date format. Use YYYY-MM-DD", fg="red"))
+                return
+
+        # Add member
+        group.add_member(member, role=role, since=since_date, until=until_date, session=session)
+        session.commit()
+
+        # Build confirmation message
+        msg = f"✓ Added '{member.name}' (ID: {member.id}) to group '{group.name}' (ID: {group.id})"
+        if role:
+            msg += f"\n  Role: {role}"
+        if since_date:
+            msg += f"\n  Since: {since_date.strftime('%Y-%m-%d')}"
+        if until_date:
+            msg += f"\n  Until: {until_date.strftime('%Y-%m-%d')}"
+        else:
+            msg += "\n  Until: present (ongoing)"
+
+        click.echo(click.style(msg, fg="green"))
+
+    except ValueError as e:
+        session.rollback()
+        click.echo(click.style(f"✗ Validation error: {str(e)}", fg="red"))
+    except Exception as e:
+        session.rollback()
+        click.echo(click.style(f"✗ Error: {str(e)}", fg="red"))
+        import traceback
+        traceback.print_exc()
+
+    finally:
+        session.close()
+
+
+@entity.command()
+@click.argument('group_id', type=int)
+@click.argument('member_id', type=int)
+@click.option('--until', type=str, help='End date (YYYY-MM-DD format, default: today)')
+def remove_member(group_id, member_id, until):
+    """
+    Remove a member from a group by setting the 'until' date.
+
+    Examples:
+        news entity remove-member 100 101
+        news entity remove-member 100 101 --until 2011-07-01
+    """
+    from datetime import datetime
+
+    db = Database()
+    session = db.get_session()
+
+    try:
+        # Get group
+        group = session.query(NamedEntity).filter_by(id=group_id).first()
+        if not group:
+            click.echo(click.style(f"✗ Group with ID {group_id} not found", fg="red"))
+            return
+
+        if not group.is_group:
+            click.echo(click.style(f"✗ Entity '{group.name}' is not a group", fg="red"))
+            return
+
+        # Get member
+        member = session.query(NamedEntity).filter_by(id=member_id).first()
+        if not member:
+            click.echo(click.style(f"✗ Member with ID {member_id} not found", fg="red"))
+            return
+
+        # Parse until date
+        until_date = None
+        if until:
+            try:
+                until_date = datetime.strptime(until, '%Y-%m-%d')
+            except ValueError:
+                click.echo(click.style(f"✗ Invalid --until date format. Use YYYY-MM-DD", fg="red"))
+                return
+
+        # Remove member
+        group.remove_member(member, until_date=until_date, session=session)
+        session.commit()
+
+        msg = f"✓ Removed '{member.name}' (ID: {member.id}) from group '{group.name}' (ID: {group.id})"
+        if until_date:
+            msg += f"\n  Ended on: {until_date.strftime('%Y-%m-%d')}"
+        else:
+            msg += f"\n  Ended on: {datetime.now().strftime('%Y-%m-%d')} (today)"
+
+        click.echo(click.style(msg, fg="green"))
+
+    except ValueError as e:
+        session.rollback()
+        click.echo(click.style(f"✗ Validation error: {str(e)}", fg="red"))
+    except Exception as e:
+        session.rollback()
+        click.echo(click.style(f"✗ Error: {str(e)}", fg="red"))
+
+    finally:
+        session.close()
+
+
+@entity.command()
+@click.argument('group_id', type=int)
+@click.option('--active-at', type=str, help='Filter members active at date (YYYY-MM-DD)')
+@click.option('--show-dates', is_flag=True, help='Show membership dates')
+def list_members(group_id, active_at, show_dates):
+    """
+    List members of a group.
+
+    Examples:
+        news entity list-members 100
+        news entity list-members 100 --active-at 2008-01-01
+        news entity list-members 100 --show-dates
+    """
+    from datetime import datetime
+    from db import entity_group_members
+
+    db = Database()
+    session = db.get_session()
+
+    try:
+        # Get group
+        group = session.query(NamedEntity).filter_by(id=group_id).first()
+        if not group:
+            click.echo(click.style(f"✗ Group with ID {group_id} not found", fg="red"))
+            return
+
+        if not group.is_group:
+            click.echo(click.style(f"✗ Entity '{group.name}' is not a group", fg="red"))
+            return
+
+        click.echo(click.style(f"\n📋 Members of '{group.name}' (ID: {group.id})", fg="cyan", bold=True))
+
+        # Get members
+        if active_at:
+            try:
+                date = datetime.strptime(active_at, '%Y-%m-%d')
+                members = group.get_active_members_at(date, session)
+                click.echo(f"   Showing members active at {date.strftime('%Y-%m-%d')}\n")
+            except ValueError:
+                click.echo(click.style(f"✗ Invalid --active-at date format. Use YYYY-MM-DD", fg="red"))
+                return
+        else:
+            # Get all members (no date filter)
+            from sqlalchemy import or_
+            members_query = session.query(NamedEntity).join(
+                entity_group_members,
+                NamedEntity.id == entity_group_members.c.member_id
+            ).filter(
+                entity_group_members.c.group_id == group.id
+            ).distinct()
+            members = members_query.all()
+
+        if not members:
+            click.echo("   No members found")
+            return
+
+        # Get membership details if requested
+        if show_dates:
+            for member in members:
+                # Get all membership periods for this member
+                memberships = session.query(entity_group_members).filter(
+                    entity_group_members.c.group_id == group.id,
+                    entity_group_members.c.member_id == member.id
+                ).all()
+
+                click.echo(f"\n   {member.name} (ID: {member.id})")
+                for membership in memberships:
+                    role = f" - {membership.role}" if membership.role else ""
+                    since = membership.since.strftime('%Y-%m-%d') if membership.since else "unknown"
+                    until = membership.until.strftime('%Y-%m-%d') if membership.until else "present"
+                    status = "✓ active" if membership.until is None else "○ ended"
+                    click.echo(f"     {status}: {since} → {until}{role}")
+        else:
+            for member in members:
+                click.echo(f"   • {member.name} (ID: {member.id})")
+
+    except Exception as e:
         click.echo(click.style(f"✗ Error: {str(e)}", fg="red"))
         import traceback
         traceback.print_exc()

@@ -49,8 +49,8 @@ tags (M:N articles via article_tags)
 article_tags (tabla de asociación)
   ├─ article_id, tag_id
 
-named_entities (M:N articles via article_entities, M:N canonical refs via entity_canonical_refs)
-  ├─ id, name (unique), entity_type, detected_types, classified_as
+named_entities (M:N articles via article_entities, M:N canonical refs via entity_canonical_refs, M:N group members via entity_group_members)
+  ├─ id, name (unique), entity_type, detected_types, classified_as, is_group
   ├─ description, photo_url, article_count, avg_local_relevance, diversity
   ├─ pagerank, global_relevance, last_rank_calculated_at
   ├─ needs_review, last_review, trend, created_at, updated_at
@@ -63,6 +63,9 @@ entity_canonical_refs (tabla de asociación para desambiguación)
 
 articles_needs_rerank (tabla de tracking)
   ├─ article_id, created_at
+
+entity_group_members (tabla de membresías con tracking temporal)
+  ├─ id, group_id, member_id, role, since, until, created_at, updated_at
 
 article_clusters (N:1 article, 1:1 flash_news)
   ├─ id, article_id, cluster_label, category, score, size

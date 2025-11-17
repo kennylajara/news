@@ -3,7 +3,7 @@ SQLAlchemy models for news portal.
 """
 
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Text, DateTime, Table, ForeignKey, Index, Enum, JSON, Float, event
+from sqlalchemy import Column, Integer, String, Text, DateTime, Table, ForeignKey, Index, Enum, JSON, Float, event, update
 from sqlalchemy.orm import relationship, declarative_base, Session
 from sqlalchemy.exc import IntegrityError
 import enum
@@ -100,6 +100,23 @@ articles_needs_rerank = Table(
     Base.metadata,
     Column('article_id', Integer, ForeignKey('articles.id', ondelete='CASCADE'), primary_key=True),
     Column('created_at', DateTime, default=datetime.utcnow, nullable=False, index=True)
+)
+
+# Table for group memberships with temporal tracking
+entity_group_members = Table(
+    'entity_group_members',
+    Base.metadata,
+    Column('id', Integer, primary_key=True, autoincrement=True),
+    Column('group_id', Integer, ForeignKey('named_entities.id', ondelete='CASCADE'), nullable=False),
+    Column('member_id', Integer, ForeignKey('named_entities.id', ondelete='CASCADE'), nullable=False),
+    Column('role', String(100), nullable=True),  # Role within the group (e.g., "vocalist", "CEO", "minister")
+    Column('since', DateTime, nullable=True, index=True),  # Start date (NULL = unknown/always)
+    Column('until', DateTime, nullable=True, index=True),  # End date (NULL = present/ongoing)
+    Column('created_at', DateTime, default=datetime.utcnow, nullable=False),
+    Column('updated_at', DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False),
+    Index('idx_entity_group_members_group', 'group_id'),
+    Index('idx_entity_group_members_member', 'member_id'),
+    Index('idx_entity_group_members_dates', 'group_id', 'member_id', 'since', 'until'),  # For temporal queries
 )
 
 
@@ -205,6 +222,9 @@ class NamedEntity(Base):
     # Entity classification for disambiguation
     classified_as = Column(Enum(EntityClassification), nullable=False, default=EntityClassification.CANONICAL, index=True)
 
+    # Group flag (only meaningful for CANONICAL entities)
+    is_group = Column(Integer, nullable=False, default=0, index=True)  # 0=no, 1=yes (SQLite doesn't have native boolean)
+
     description = Column(Text, nullable=True)
     photo_url = Column(String(500), nullable=True)
     article_count = Column(Integer, nullable=False, default=0)  # Number of articles that mention this entity
@@ -228,8 +248,18 @@ class NamedEntity(Base):
         backref='referenced_by'  # Canonical entities can see who references them
     )
 
+    # Group relationships (only meaningful when is_group=1)
+    members = relationship(
+        'NamedEntity',
+        secondary=entity_group_members,
+        primaryjoin=id == entity_group_members.c.group_id,
+        secondaryjoin=id == entity_group_members.c.member_id,
+        backref='member_of_groups',  # Inverse: groups this entity is a member of
+        viewonly=True  # Prevent automatic sync (we manage manually for temporal control)
+    )
+
     def __repr__(self):
-        return f"<NamedEntity(name='{self.name}', type={self.entity_type.value}, classified_as={self.classified_as.value})>"
+        return f"<NamedEntity(name='{self.name}', type={self.entity_type.value}, classified_as={self.classified_as.value}, is_group={self.is_group})>"
 
     def _mark_articles_for_rerank(self, session):
         """
@@ -446,6 +476,293 @@ class NamedEntity(Base):
                 errors.append("NOT_AN_ENTITY cannot have canonical_refs relationships")
 
         return (len(errors) == 0, errors)
+
+    # ====================
+    # Group Management Methods
+    # ====================
+
+    def set_as_group(self, session):
+        """
+        Mark this entity as a group.
+
+        Only CANONICAL entities can be marked as groups.
+
+        Raises:
+            ValueError: If entity is not CANONICAL
+        """
+        if self.classified_as != EntityClassification.CANONICAL:
+            raise ValueError(
+                f"Only CANONICAL entities can be groups. "
+                f"Entity '{self.name}' is {self.classified_as.value}"
+            )
+
+        self.is_group = 1
+
+    def unset_as_group(self, session):
+        """
+        Unmark this entity as a group.
+
+        Raises:
+            ValueError: If entity still has members
+        """
+        if self.id is not None:
+            # Check if entity has members
+            member_count = session.query(entity_group_members).filter(
+                entity_group_members.c.group_id == self.id
+            ).count()
+
+            if member_count > 0:
+                raise ValueError(
+                    f"Cannot unset group: entity '{self.name}' still has {member_count} member(s). "
+                    f"Remove all members first."
+                )
+
+        self.is_group = 0
+
+    def _check_membership_overlap(self, member_id, since, until, session, exclude_membership_id=None):
+        """
+        Check if a membership period overlaps with existing memberships.
+
+        Args:
+            member_id: ID of the member to check
+            since: Start date of new membership (can be None)
+            until: End date of new membership (can be None)
+            session: SQLAlchemy session
+            exclude_membership_id: Membership ID to exclude from check (for updates)
+
+        Returns:
+            bool: True if there's an overlap, False otherwise
+        """
+        if self.id is None:
+            return False  # Entity not persisted yet, no existing memberships
+
+        # Query existing memberships for this (group_id, member_id) pair
+        query = session.query(entity_group_members).filter(
+            entity_group_members.c.group_id == self.id,
+            entity_group_members.c.member_id == member_id
+        )
+
+        if exclude_membership_id:
+            query = query.filter(entity_group_members.c.id != exclude_membership_id)
+
+        existing_memberships = query.all()
+
+        # Check for overlaps
+        for membership in existing_memberships:
+            existing_since = membership.since
+            existing_until = membership.until
+
+            # Two periods overlap if:
+            # - new_since < existing_until (or existing_until is NULL)
+            # AND
+            # - new_until > existing_since (or new_until is NULL)
+
+            # Handle NULL dates (NULL means open-ended)
+            new_since = since if since else datetime.min
+            new_until = until if until else datetime.max
+            existing_since_cmp = existing_since if existing_since else datetime.min
+            existing_until_cmp = existing_until if existing_until else datetime.max
+
+            if new_since < existing_until_cmp and new_until > existing_since_cmp:
+                return True  # Overlap detected
+
+        return False
+
+    def add_member(self, member, role=None, since=None, until=None, session=None):
+        """
+        Add a member to this group.
+
+        Args:
+            member: NamedEntity instance to add as member
+            role: Optional role within the group
+            since: Start date (None = unknown/always)
+            until: End date (None = present/ongoing)
+            session: SQLAlchemy session (required for overlap check)
+
+        Raises:
+            ValueError: If entity is not a group, member is not persisted, or period overlaps
+        """
+        if not self.is_group:
+            raise ValueError(
+                f"Entity '{self.name}' is not a group. Use set_as_group() first."
+            )
+
+        if self.id is None:
+            raise ValueError(
+                f"Group '{self.name}' must be persisted before adding members"
+            )
+
+        if member.id is None:
+            raise ValueError(
+                f"Member '{member.name}' must be persisted before being added to group"
+            )
+
+        if session is None:
+            raise ValueError("session parameter is required for overlap validation")
+
+        # Prevent self-membership
+        if self.id == member.id:
+            raise ValueError(
+                f"Entity cannot be a member of itself: '{self.name}'"
+            )
+
+        # Validate date range
+        if since and until and since > until:
+            raise ValueError(
+                f"Invalid date range: since ({since.strftime('%Y-%m-%d')}) must be before until ({until.strftime('%Y-%m-%d')})"
+            )
+
+        # Prevent future dates
+        now = datetime.utcnow()
+        if since and since > now:
+            raise ValueError(
+                f"Start date cannot be in the future: {since.strftime('%Y-%m-%d')}"
+            )
+        if until and until > now:
+            raise ValueError(
+                f"End date cannot be in the future: {until.strftime('%Y-%m-%d')}"
+            )
+
+        # Check for overlapping periods
+        if self._check_membership_overlap(member.id, since, until, session):
+            raise ValueError(
+                f"Membership period overlaps with existing membership for '{member.name}' in group '{self.name}'"
+            )
+
+        # Insert membership
+        session.execute(
+            entity_group_members.insert().values(
+                group_id=self.id,
+                member_id=member.id,
+                role=role,
+                since=since,
+                until=until,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+        )
+
+    def remove_member(self, member, until_date=None, session=None):
+        """
+        Mark a member as having left the group by setting the 'until' date.
+
+        Finds the active membership (until=NULL) and sets its until date.
+
+        Args:
+            member: NamedEntity instance to remove
+            until_date: Date when member left (default: now)
+            session: SQLAlchemy session
+
+        Raises:
+            ValueError: If no active membership found
+        """
+        if not self.is_group:
+            raise ValueError(
+                f"Entity '{self.name}' is not a group"
+            )
+
+        if self.id is None or member.id is None:
+            raise ValueError("Both group and member must be persisted")
+
+        if session is None:
+            raise ValueError("session parameter is required")
+
+        if until_date is None:
+            until_date = datetime.utcnow()
+
+        # Find active membership (until=NULL)
+        result = session.execute(
+            update(entity_group_members).where(
+                (entity_group_members.c.group_id == self.id) &
+                (entity_group_members.c.member_id == member.id) &
+                (entity_group_members.c.until.is_(None))
+            ).values(
+                until=until_date,
+                updated_at=datetime.utcnow()
+            )
+        )
+
+        if result.rowcount == 0:
+            raise ValueError(
+                f"No active membership found for '{member.name}' in group '{self.name}'"
+            )
+
+    def get_active_members_at(self, date, session):
+        """
+        Get members that were active in the group at a specific date.
+
+        Args:
+            date: datetime object (usually article.published_date)
+            session: SQLAlchemy session
+
+        Returns:
+            List of NamedEntity members active at that date
+        """
+        if not self.is_group:
+            return []
+
+        if self.id is None:
+            return []
+
+        # Query members where:
+        # - since <= date (or since IS NULL)
+        # - until >= date (or until IS NULL)
+        from sqlalchemy import and_, or_
+
+        members = session.query(NamedEntity).join(
+            entity_group_members,
+            NamedEntity.id == entity_group_members.c.member_id
+        ).filter(
+            entity_group_members.c.group_id == self.id,
+            # since condition: NULL or since <= date
+            or_(
+                entity_group_members.c.since.is_(None),
+                entity_group_members.c.since <= date
+            ),
+            # until condition: NULL or until >= date
+            or_(
+                entity_group_members.c.until.is_(None),
+                entity_group_members.c.until >= date
+            )
+        ).all()
+
+        return members
+
+    def get_active_groups_at(self, date, session):
+        """
+        Get groups this entity was a member of at a specific date.
+
+        Args:
+            date: datetime object
+            session: SQLAlchemy session
+
+        Returns:
+            List of NamedEntity groups this entity belonged to at that date
+        """
+        if self.id is None:
+            return []
+
+        from sqlalchemy import and_, or_
+
+        groups = session.query(NamedEntity).join(
+            entity_group_members,
+            NamedEntity.id == entity_group_members.c.group_id
+        ).filter(
+            entity_group_members.c.member_id == self.id,
+            NamedEntity.is_group == 1,
+            # since condition
+            or_(
+                entity_group_members.c.since.is_(None),
+                entity_group_members.c.since <= date
+            ),
+            # until condition
+            or_(
+                entity_group_members.c.until.is_(None),
+                entity_group_members.c.until >= date
+            )
+        ).all()
+
+        return groups
 
 
 # Note: No automatic constraint validation for canonical_refs since it's a many-to-many relationship

@@ -464,6 +464,85 @@ uv run news entity classify-not-entity 234
 - Se marcan artículos para recálculo
 - Su relevancia será 0.0 tras recalcular (ignorada completamente)
 
+### `news entity set-group <entity_id>`
+
+Marca una entidad como grupo.
+
+**Ejemplo:**
+```bash
+uv run news entity set-group 100
+```
+
+**Restricción:** Solo entidades CANONICAL pueden ser grupos.
+
+### `news entity unset-group <entity_id>`
+
+Desmarca una entidad como grupo.
+
+**Ejemplo:**
+```bash
+uv run news entity unset-group 100
+```
+
+**Restricción:** La entidad no debe tener miembros.
+
+### `news entity add-member <group_id> <member_id>`
+
+Agrega un miembro a un grupo.
+
+**Opciones:**
+- `--role TEXT`: Rol dentro del grupo
+- `--since YYYY-MM-DD`: Fecha de inicio
+- `--until YYYY-MM-DD`: Fecha de fin
+
+**Ejemplos:**
+```bash
+# Miembro actualmente activo
+uv run news entity add-member 100 101
+
+# Con rol
+uv run news entity add-member 100 101 --role "vocalist"
+
+# Con período temporal
+uv run news entity add-member 100 101 --since 1997-01-01 --until 2011-07-01
+```
+
+### `news entity remove-member <group_id> <member_id>`
+
+Marca un miembro como que dejó el grupo (establece fecha `until`).
+
+**Opciones:**
+- `--until YYYY-MM-DD`: Fecha de salida (default: hoy)
+
+**Ejemplos:**
+```bash
+# Salida hoy
+uv run news entity remove-member 100 101
+
+# Salida en fecha específica
+uv run news entity remove-member 100 101 --until 2011-07-01
+```
+
+### `news entity list-members <group_id>`
+
+Lista miembros de un grupo.
+
+**Opciones:**
+- `--active-at YYYY-MM-DD`: Filtrar miembros activos en fecha específica
+- `--show-dates`: Mostrar fechas de membresía
+
+**Ejemplos:**
+```bash
+# Lista todos los miembros
+uv run news entity list-members 100
+
+# Miembros activos en 2008
+uv run news entity list-members 100 --active-at 2008-01-01
+
+# Con fechas
+uv run news entity list-members 100 --show-dates
+```
+
 ### `news entity recalculate-local`
 
 Recalcula relevancia local de artículos tras cambios de clasificación.

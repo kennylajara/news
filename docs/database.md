@@ -114,6 +114,7 @@ Entidades nombradas extraídas de artículos mediante NER (Named Entity Recognit
 | entity_type | ENUM | NOT NULL | Tipo de entidad |
 | detected_types | JSON | NULLABLE | Lista de tipos detectados por spaCy para esta entidad |
 | classified_as | ENUM | NOT NULL, DEFAULT 'canonical', INDEX | Clasificación para desambiguación |
+| is_group | INTEGER | NOT NULL, DEFAULT 0, INDEX | Flag de grupo (0=no, 1=yes) - solo para CANONICAL |
 | description | TEXT | NULLABLE | Descripción de la entidad |
 | photo_url | VARCHAR(500) | NULLABLE | URL de la foto de la entidad |
 | article_count | INTEGER | NOT NULL, DEFAULT 0 | Número de artículos que mencionan esta entidad |
@@ -157,6 +158,9 @@ Entidades nombradas extraídas de artículos mediante NER (Named Entity Recognit
 **Campos clave**:
 - `detected_types`: Lista JSON de todos los tipos que spaCy ha detectado para esta entidad (útil para identificar inconsistencias)
 - `classified_as`: Clasificación para desambiguación (canonical/alias/ambiguous/not_an_entity)
+- `is_group`: Flag de grupo (solo significativo para entidades CANONICAL)
+  - 0 = Entidad individual normal (persona, organización)
+  - 1 = Entidad de grupo (banda, equipo, consejo) que puede tener miembros
 - `article_count`: Número de artículos que mencionan esta entidad (actualizado durante reranking)
 - `avg_local_relevance`: Promedio de relevancia local en todos los artículos donde aparece
 - `diversity`: Número de entidades únicas con las que co-ocurre (mide conectividad en el grafo)
@@ -333,6 +337,45 @@ Tabla de asociación many-to-many para referencias canónicas entre entidades (d
 
 **Relaciones**:
 - N:M entre `named_entities` (self-join)
+
+### Tabla: `entity_group_members`
+
+Tabla para gestionar membresías de grupos con tracking temporal.
+
+| Campo | Tipo | Restricciones | Descripción |
+|-------|------|---------------|-------------|
+| id | INTEGER | PRIMARY KEY, AUTO_INCREMENT | ID único de la membresía |
+| group_id | INTEGER | FOREIGN KEY, NOT NULL | ID del grupo (entidad con is_group=1) |
+| member_id | INTEGER | FOREIGN KEY, NOT NULL | ID del miembro |
+| role | VARCHAR(100) | NULLABLE | Rol dentro del grupo (ej: "vocalist", "CEO", "minister") |
+| since | DATETIME | NULLABLE, INDEX | Fecha de inicio (NULL = desconocido/siempre) |
+| until | DATETIME | NULLABLE, INDEX | Fecha de fin (NULL = presente/activo) |
+| created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP | Fecha de creación del registro |
+| updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP | Última actualización |
+
+**Propósito**: Relaciona grupos con sus miembros con información temporal.
+
+**Ejemplos de uso:**
+- Romeo Santos en Aventura: `(group_id=AVENTURA, member_id=ROMEO, since=1997-01-01, until=2011-07-01, role="vocalist")`
+- Wisin en Wisin & Yandel (activo): `(group_id=WISIN_YANDEL, member_id=WISIN, since=1998-01-01, until=NULL)`
+
+**Restricciones:**
+- PK: `id` (auto-incremental, permite múltiples períodos para el mismo par group-member)
+- `group_id` ON DELETE CASCADE (si se elimina el grupo, se eliminan sus membresías)
+- `member_id` ON DELETE CASCADE (si se elimina el miembro, se eliminan sus membresías)
+
+**Validación de overlaps:**
+- El sistema valida que no haya períodos superpuestos para el mismo `(group_id, member_id)`
+- Una persona no puede estar en el grupo dos veces al mismo tiempo
+- Validación implementada en `NamedEntity.add_member()` método
+
+**Índices:**
+- `group_id`: Para buscar miembros de un grupo
+- `member_id`: Para buscar grupos de un miembro
+- `(group_id, member_id, since, until)`: Para queries temporales eficientes
+
+**Relaciones:**
+- N:M entre `named_entities` (self-join con is_group=1)
 
 ### Tabla: `articles_needs_rerank`
 

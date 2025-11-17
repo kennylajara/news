@@ -813,6 +813,182 @@ if not is_valid:
 
 ---
 
+## Sistema de Grupos de Entidades
+
+### Introducción
+
+El sistema de grupos permite representar entidades colectivas (bandas, equipos, consejos) que tienen miembros individuales. Los grupos tienen tracking temporal de membresías con fechas de inicio/fin y roles.
+
+### Concepto
+
+Un grupo es una entidad canónica marcada con `is_group=1` que puede tener relaciones con otras entidades (sus miembros) a través de la tabla `entity_group_members`.
+
+**Características:**
+- Solo entidades CANONICAL pueden ser grupos
+- Los miembros pueden ser cualquier entidad (incluso otros grupos)
+- Cada membresía tiene fecha de inicio/fin opcional
+- Se valida que no haya overlaps (períodos superpuestos) para el mismo miembro
+
+**Casos de uso:**
+- **Música:** "Wisin & Yandel" → [Wisin, Yandel]
+- **Política:** "Consejo de Ministros" → [Ministro de Salud, Ministro de Educación, ...]
+- **Empresas:** "Microsoft" → [Satya Nadella, Bill Gates, ...]
+
+### Estructura de Datos
+
+#### Flag `is_group`
+```python
+# En NamedEntity
+is_group = Column(Integer, nullable=False, default=0, index=True)
+# 0 = Entidad individual
+# 1 = Grupo que puede tener miembros
+```
+
+#### Tabla `entity_group_members`
+```sql
+CREATE TABLE entity_group_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER REFERENCES named_entities(id) ON DELETE CASCADE,
+    member_id INTEGER REFERENCES named_entities(id) ON DELETE CASCADE,
+    role VARCHAR(100),           -- Opcional: "vocalist", "CEO", etc.
+    since DATETIME,              -- Fecha de inicio (NULL = desconocido/siempre)
+    until DATETIME,              -- Fecha de fin (NULL = presente/activo)
+    created_at DATETIME,
+    updated_at DATETIME
+);
+```
+
+**Características:**
+- PK auto-incremental (permite múltiples períodos para el mismo member)
+- Sin unique constraint (permite que un miembro salga y vuelva a entrar)
+- Validación de overlaps a nivel de aplicación
+
+### Gestión de Grupos
+
+#### Marcar como grupo
+```bash
+# Solo entidades CANONICAL pueden ser grupos
+uv run news entity set-group <entity_id>
+```
+
+#### Desmarcar como grupo
+```bash
+# Requiere que no tenga miembros
+uv run news entity unset-group <entity_id>
+```
+
+#### Agregar miembro
+```bash
+# Miembro actualmente activo (since=NULL, until=NULL)
+uv run news entity add-member <group_id> <member_id>
+
+# Con rol y fechas
+uv run news entity add-member 100 101 \
+    --role "vocalist" \
+    --since 1997-01-01 \
+    --until 2011-07-01
+```
+
+**Validación:**
+- El grupo debe tener `is_group=1`
+- El miembro debe existir en la base de datos
+- No puede haber overlap con membresías existentes
+
+#### Remover miembro
+```bash
+# Marca la fecha de salida (actualiza until del registro activo)
+uv run news entity remove-member <group_id> <member_id>
+
+# Con fecha específica
+uv run news entity remove-member 100 101 --until 2011-07-01
+```
+
+#### Listar miembros
+```bash
+# Todos los miembros (todos los períodos)
+uv run news entity list-members <group_id>
+
+# Miembros activos en fecha específica
+uv run news entity list-members 100 --active-at 2008-01-01
+
+# Con detalles de fechas y roles
+uv run news entity list-members 100 --show-dates
+```
+
+### Queries Temporales
+
+#### Obtener miembros activos en una fecha
+```python
+# En código (usando métodos helper)
+article_date = article.published_date
+active_members = group.get_active_members_at(article_date, session)
+
+# SQL equivalente
+SELECT ne.*
+FROM named_entities ne
+JOIN entity_group_members egm ON ne.id = egm.member_id
+WHERE egm.group_id = :group_id
+  AND (egm.since IS NULL OR egm.since <= :date)
+  AND (egm.until IS NULL OR egm.until >= :date)
+```
+
+#### Obtener grupos de un miembro en una fecha
+```python
+active_groups = member.get_active_groups_at(article_date, session)
+```
+
+### Ejemplo Completo
+
+**Escenario:** Aventura (grupo musical)
+
+```bash
+# 1. Buscar entidades
+uv run news entity search "Aventura"  # ID: 100
+uv run news entity search "Romeo Santos"  # ID: 101
+uv run news entity search "Henry Santos"  # ID: 102
+
+# 2. Marcar Aventura como grupo
+uv run news entity set-group 100
+
+# 3. Agregar miembros históricos
+uv run news entity add-member 100 101 \
+    --role "lead vocalist" \
+    --since 1997-01-01 \
+    --until 2011-07-01  # Romeo salió en 2011
+
+uv run news entity add-member 100 102 \
+    --role "vocalist" \
+    --since 1997-01-01  # Henry sigue activo (until=NULL)
+
+# 4. Ver miembros en diferentes fechas
+uv run news entity list-members 100 --active-at 2008-01-01
+# Output: Romeo Santos, Henry Santos (ambos activos)
+
+uv run news entity list-members 100 --active-at 2024-01-01
+# Output: Henry Santos (solo Henry activo)
+
+# 5. Ver información del grupo
+uv run news entity show "Aventura"
+# Output incluye: Group: Yes (2 member(s))
+
+# 6. Ver información de un miembro
+uv run news entity show "Romeo Santos"
+# Output incluye: Member of 1 group(s)
+```
+
+### Boost de Relevancia (Futuro)
+
+**Estado actual:** Los grupos NO afectan la relevancia de miembros ni viceversa.
+
+**Implementación futura:** Cuando se implemente boost bidireccional:
+- Mencionar grupo → boost a miembros activos en la fecha del artículo
+- Mencionar miembro → boost al grupo si era miembro activo
+- Boost con conservación de suma (no infla relevancia total)
+
+Ver diseño detallado en discusiones de desarrollo.
+
+---
+
 ## Relevancia Global de Entidades (PageRank)
 
 ### Concepto
