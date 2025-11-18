@@ -437,14 +437,25 @@ session = db.get_session()
 # Crear/Obtener source
 source = db.get_or_create_source(session, "example.com", "Example News")
 
-# Guardar artículo
+# Guardar artículo (falla si ya existe con mismo hash)
 article_data = {
     "title": "Título",
     "content": "Contenido en Markdown",
-    "tags": ["política", "economía"]
-    # ...
+    "tags": ["política", "economía"],
+    "_metadata": {
+        "url": "https://example.com/article",
+        "domain": "example.com",
+        "hash": "abc123..."
+    }
 }
 article = db.save_article(session, article_data, "example.com")
+
+# Guardar o actualizar artículo (upsert - recomendado)
+article, was_updated = db.save_or_update_article(session, article_data, "example.com")
+if was_updated:
+    print(f"Article {article.id} updated")
+else:
+    print(f"Article {article.id} created")
 
 # Listar artículos
 articles = db.list_articles(session, limit=10)
@@ -472,6 +483,67 @@ Los métodos `get_or_create_source()` y `get_or_create_tag()` implementan el pat
 3. Retornar el objeto
 
 Esto simplifica la lógica y evita duplicados.
+
+## Upsert de Artículos
+
+### `save_or_update_article()`
+
+Este método implementa el patrón "upsert" (create or update) para artículos:
+
+**Comportamiento:**
+1. Busca artículo existente por **hash** o **URL**
+2. Si existe: **actualiza** todos los campos (título, contenido, tags, etc.) y marca `updated_at`
+3. Si no existe: **crea** nuevo artículo
+4. Retorna tupla `(Article, was_updated: bool)`
+
+**Ventajas sobre `save_article()`:**
+- ✅ No falla si el artículo ya existe (idempotente)
+- ✅ Permite re-procesar artículos sin errores
+- ✅ Útil para actualizar contenido que cambió en el sitio
+- ✅ Indica si fue creación o actualización
+
+**Cuándo usar cada uno:**
+
+| Método | Cuándo usar |
+|--------|-------------|
+| `save_article()` | Cuando **sabes** que el artículo no existe |
+| `save_or_update_article()` | Cuando **no sabes** si existe (recomendado para comandos CLI) |
+
+**Ejemplo:**
+
+```python
+# Escenario: Re-procesar artículos desde caché
+article_data = {
+    "title": "Título actualizado",
+    "content": "Nuevo contenido",
+    "tags": ["tag1", "tag2"],
+    "_metadata": {
+        "url": "https://example.com/article",
+        "domain": "example.com",
+        "hash": "abc123def456..."
+    }
+}
+
+# Primera vez: crea
+article, was_updated = db.save_or_update_article(session, article_data, "example.com")
+print(f"Created: {article.id}")  # was_updated = False
+
+# Segunda vez (mismo hash/URL): actualiza
+article_data["title"] = "Título modificado"
+article, was_updated = db.save_or_update_article(session, article_data, "example.com")
+print(f"Updated: {article.id}")  # was_updated = True
+```
+
+**Campos actualizados:**
+- `title`, `subtitle`, `author`, `published_date`, `location`
+- `content`, `category`
+- `tags` (se reemplazan completamente)
+- `updated_at` (automático)
+
+**Campos NO actualizados:**
+- `id` (preserva el ID original)
+- `created_at` (preserva fecha de creación original)
+- `enriched_at`, `cluster_enriched_at` (preserva estado de procesamiento)
 
 ## Cascade Deletes
 

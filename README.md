@@ -108,23 +108,30 @@ uv run news domain --help       # Ver comandos de dominios
 #### Artículos
 
 ```bash
-# Descargar artículo (usa caché automáticamente)
+# Descargar artículo individual (usa caché automáticamente)
 uv run news article fetch "<URL>"
-uv run news article fetch "<URL>" --cache-no-read   # Forzar descarga fresca
-uv run news article fetch "<URL>" --cache-no-save   # No guardar en caché
+uv run news article fetch "<URL>" --reindex      # Actualizar si ya existe
+uv run news article fetch "<URL>" --dont-cache   # No guardar en caché
+
+# Procesar artículos desde caché (sin descargar)
+uv run news article fetch-cached                          # Solo nuevos
+uv run news article fetch-cached --reindex                # Actualizar existentes
+uv run news article fetch-cached --domain diariolibre.com # Filtrar dominio
+uv run news article fetch-cached --limit 50               # Limitar cantidad
 
 # Listar artículos
 uv run news article list                           # Últimos 10
 uv run news article list --limit 20                # Con límite
 uv run news article list --source diariolibre.com  # Por fuente
 uv run news article list --tag "política"          # Por tag
-uv run news article list --preprocessed            # Solo preprocesados
-uv run news article list --pending-preprocess      # Pendientes de preprocesar
+uv run news article list --enriched                # Solo enriquecidos
+uv run news article list --pending-enrich          # Pendientes de enriquecer
 
 # Ver artículo
-uv run news article show <ID>          # Vista previa
-uv run news article show <ID> --full   # Artículo completo
-uv run news article show <ID> --entities  # Ver entidades extraídas (NER)
+uv run news article show <ID>               # Vista previa
+uv run news article show <ID> --full        # Artículo completo
+uv run news article show <ID> --entities    # Ver entidades extraídas (NER)
+uv run news article show <ID> --clusters    # Ver clustering de oraciones
 
 # Eliminar artículo
 uv run news article delete <ID>
@@ -140,8 +147,18 @@ uv run news cache stats --domain diariolibre.com
 # Listar dominios en caché
 uv run news cache domains
 
+# Listar URLs cacheadas
+uv run news cache list
+uv run news cache list --domain diariolibre.com
+uv run news cache list --limit 50
+
+# Ver detalles de un URL específico
+uv run news cache show "<URL>"
+uv run news cache show <hash>
+
 # Limpiar caché
 uv run news cache clear --domain diariolibre.com   # Solo un dominio
+uv run news cache clear --article "<URL>"          # Un artículo específico
 uv run news cache clear                            # Todo (requiere confirmación)
 ```
 
@@ -226,6 +243,7 @@ uv run news entity search "Luis"
 
 ## Roadmap
 
+- No enriquecer si se detecta que en nuevo contenido limpiado es identico al anterior
 - NER puede crear alias de nombres de personas y organizaciones automáticamente (nombres, apellidos e iniciales).
 - Forzar NER a detectar referencias aprobadas
 - Hacer que la IA pueda revisar hacer review de las entidades (con flag --auto-accept)
@@ -241,4 +259,5 @@ uv run news entity search "Luis"
 - Desambiguación de entidades (una entidad puede referenciar a más de 2)
 - Relevancia por categoria
 - Reconocer monedas como un tipo de entidad (dólar, los dólares canadiense, peso, peso dominicano), diferenciarlo de MONEY (100 dólares, un peso, 100 pesos dominicanos)
-- Crear batches en el pagerank y guardar el motivo de finalización del cálculo (max iter, timeout, convergencia) 
+- Crear batches en el pagerank y guardar el motivo de finalización del cálculo (max iter, timeout, convergencia)
+- limpiar prints

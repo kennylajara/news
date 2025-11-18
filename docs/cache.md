@@ -381,20 +381,34 @@ if result['final_url'] != url:
 Cuando estás desarrollando un extractor nuevo:
 
 ```bash
-# 1. Descarga inicial (se guarda en caché)
+# 1. Descarga inicial de algunos artículos de ejemplo (se guarda en caché)
 news article fetch "https://nuevositio.com/articulo-1"
 news article fetch "https://nuevositio.com/articulo-2"
+news article fetch "https://nuevositio.com/articulo-3"
 
 # 2. Creas el extractor en extractors/nuevositio_com.py
 
-# 3. Borras news.db para limpiar errores
+# 3. Borras news.db para limpiar errores de intentos previos
 rm data/news.db
 
-# 4. Re-procesas SIN volver a descargar (usa caché)
-news article fetch "https://nuevositio.com/articulo-1"  # ← Lee del caché
-news article fetch "https://nuevositio.com/articulo-2"  # ← Lee del caché
+# 4. Re-procesas TODOS los artículos del dominio desde caché (MUY RÁPIDO)
+news article fetch-cached --domain nuevositio.com
+# ✓ Created (ID: 1)
+# ✓ Created (ID: 2)
+# ✓ Created (ID: 3)
 
-# 5. Repites hasta que el extractor funcione perfecto
+# 5. Encuentras un error, modificas el extractor
+
+# 6. Re-procesas con --reindex para actualizar artículos
+news article fetch-cached --domain nuevositio.com --reindex
+# ↻ Updated (ID: 1)
+# ↻ Updated (ID: 2)
+# ↻ Updated (ID: 3)
+
+# 7. Repites pasos 5-6 hasta que el extractor funcione perfecto
+
+# Alternativamente, puedes usar fetch individual:
+news article fetch "https://nuevositio.com/articulo-1" --reindex  # ← Lee del caché
 ```
 
 ### Testing de Cambios de Schema
@@ -412,13 +426,88 @@ rm data/news.db
 # Con caché: 0 HTTP requests, ~10 segundos
 ```
 
-### Forzar Re-descarga
+### Procesar Múltiples Artículos desde Caché
 
-Si un sitio actualiza un artículo:
+El comando `fetch-cached` permite procesar múltiples artículos directamente desde el caché sin descargar nada:
 
 ```bash
-# Forzar descarga fresca (actualiza caché)
-news article fetch "URL" --cache-no-read
+# Procesar todos los artículos del caché (solo crea nuevos, salta existentes)
+news article fetch-cached
+
+# Output:
+# Loading cached URLs...
+# Found 50 cached URL(s)
+#
+# Processing 50 article(s)...
+#
+# [1/50] https://example.com/article-1
+#   ✓ Created (ID: 1)
+# [2/50] https://example.com/article-2
+#   ⊘ Already exists, skipping
+# ...
+#
+# Summary:
+#   Created: 25
+#   Skipped: 25
+
+# Re-procesar TODOS los artículos (actualiza existentes)
+news article fetch-cached --reindex
+
+# Output:
+# [1/50] https://example.com/article-1
+#   ↻ Updated (ID: 1)
+# [2/50] https://example.com/article-2
+#   ↻ Updated (ID: 2)
+# ...
+#
+# Summary:
+#   Updated: 50
+
+# Filtrar por dominio
+news article fetch-cached --domain diariolibre.com
+
+# Limitar cantidad
+news article fetch-cached --limit 20
+
+# Combinar filtros
+news article fetch-cached --domain diariolibre.com --limit 10 --reindex
+```
+
+**Casos de uso comunes:**
+
+1. **Repoblar news.db después de recrearlo:**
+   ```bash
+   rm data/news.db
+   news article fetch-cached
+   # → Procesa todos los artículos del caché (MUY RÁPIDO)
+   ```
+
+2. **Actualizar extractores y re-procesar:**
+   ```bash
+   # Modificas extractors/example_com.py
+   news article fetch-cached --domain example.com --reindex
+   # → Re-procesa solo artículos de ese dominio con el extractor nuevo
+   ```
+
+3. **Importación inicial (primera vez):**
+   ```bash
+   news article fetch-cached
+   # → Solo procesa artículos que no existen en news.db
+   ```
+
+4. **Sincronización completa (actualizar todo):**
+   ```bash
+   news article fetch-cached --reindex
+   # → Actualiza TODOS los artículos existentes con el contenido del caché
+   ```
+
+### Forzar Re-descarga
+
+Si un sitio actualiza un artículo y quieres obtener la versión fresca:
+
+```bash
+# Forzar descarga fresca (actualiza caché + news.db)
+news article fetch "URL" --reindex
 ```
 
 ### URLs Temporales
@@ -426,7 +515,7 @@ news article fetch "URL" --cache-no-read
 Para URLs que no quieres cachear (ej: URLs firmadas con tokens):
 
 ```bash
-news article fetch "https://example.com/article?token=xyz123" --cache-no-save
+news article fetch "https://example.com/article?token=xyz123" --dont-cache
 ```
 
 ## Ventajas

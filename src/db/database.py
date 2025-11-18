@@ -159,6 +159,73 @@ class Database:
 
         return article
 
+    def save_or_update_article(self, session: Session, article_data: dict, source_domain: str) -> tuple[Article, bool]:
+        """
+        Save article to database or update if it already exists.
+
+        Args:
+            session: Database session
+            article_data: Dictionary with article data
+            source_domain: Domain of the source
+
+        Returns:
+            Tuple of (Article object, was_updated: bool)
+            was_updated is True if article was updated, False if it was created
+        """
+        article_hash = article_data['_metadata']['hash']
+        article_url = article_data['_metadata']['url']
+
+        # Check if article exists by hash or URL
+        existing = session.query(Article).filter(
+            (Article.hash == article_hash) | (Article.url == article_url)
+        ).first()
+
+        if existing:
+            # Update existing article
+            source = self.get_or_create_source(session, source_domain)
+
+            # Parse published date if present
+            published_date = None
+            if article_data.get('date'):
+                try:
+                    date_str = article_data['date']
+                    if '+' in date_str or date_str.count('-') > 2:
+                        date_str = date_str[:19]
+                    published_date = datetime.fromisoformat(date_str)
+                except (ValueError, TypeError):
+                    pass
+
+            # Update fields
+            existing.hash = article_hash
+            existing.url = article_url
+            existing.source_id = source.id
+            existing.title = article_data.get('title', '')
+            existing.subtitle = article_data.get('subtitle')
+            existing.author = article_data.get('author')
+            existing.published_date = published_date
+            existing.location = article_data.get('location')
+            existing.content = article_data.get('content', '')
+            existing.category = article_data.get('category')
+            existing.updated_at = datetime.utcnow()
+
+            # Reset enrichment status (article needs to be re-processed)
+            existing.enriched_at = None
+            existing.cluster_enriched_at = None
+
+            # Update tags: clear existing and add new ones
+            existing.tags.clear()
+            with session.no_autoflush:
+                for tag_name in article_data.get('tags', []):
+                    if tag_name:
+                        tag = self.get_or_create_tag(session, tag_name)
+                        existing.tags.append(tag)
+
+            return existing, True
+        else:
+            # Create new article using existing save_article method
+            article = self.save_article(session, article_data, source_domain)
+            return article, False
+
     def get_article_by_hash(self, session: Session, hash: str) -> Article:
         """Get article by hash."""
         return session.query(Article).filter_by(hash=hash).first()

@@ -7,6 +7,117 @@ from db import Database, Article, Tag
 from get_news import get_domain, get_url_hash, download_html, clean_html, load_extractor
 
 
+def _process_article_from_html(url, html_content, verbose=True):
+    """
+    Process article from HTML content.
+
+    This is a helper function shared by fetch and fetch-cached commands.
+
+    Args:
+        url: Article URL (should be final URL after redirects)
+        html_content: Raw HTML content
+        verbose: Whether to print progress messages
+
+    Returns:
+        Dictionary with:
+            - 'success': bool
+            - 'article': Article object if success, None otherwise
+            - 'error': str if not success, None otherwise
+            - 'article_data': dict with extracted data if success
+    """
+    try:
+        domain = get_domain(url)
+        url_hash = get_url_hash(url)
+
+        # Clean HTML
+        if verbose:
+            click.echo("Cleaning HTML...")
+        cleaned_html = clean_html(html_content)
+
+        # Load extractor
+        if verbose:
+            click.echo(f"Looking for extractor for {domain}...")
+        extractor = load_extractor(domain)
+
+        if extractor is None:
+            error_msg = f"No extractor found for domain '{domain}'"
+            if verbose:
+                click.echo(click.style(f"✗ {error_msg}", fg="red"))
+                click.echo(f"Create file: extractors/{domain.replace('.', '_')}.py")
+            return {
+                'success': False,
+                'article': None,
+                'error': error_msg,
+                'article_data': None
+            }
+
+        if verbose:
+            click.echo(click.style(f"✓ Extractor found: extractors/{domain.replace('.', '_')}.py", fg="green"))
+
+        # Extract article data
+        if verbose:
+            click.echo("Extracting article data...")
+        article_data = extractor.extract(cleaned_html, url)
+
+        # Add metadata
+        article_data["_metadata"] = {
+            "url": url,
+            "domain": domain,
+            "hash": url_hash
+        }
+
+        # Save to database (or update if exists)
+        if verbose:
+            click.echo("Saving to database...")
+        db = Database()
+        session = db.get_session()
+        try:
+            article_obj, was_updated = db.save_or_update_article(session, article_data, domain)
+            session.commit()
+
+            # Extract ID before closing session
+            article_id = article_obj.id
+
+            if verbose:
+                if was_updated:
+                    click.echo(click.style(f"✓ Article updated in database (ID: {article_id})", fg="green"))
+                else:
+                    click.echo(click.style(f"✓ Article saved to database (ID: {article_id})", fg="green"))
+
+            return {
+                'success': True,
+                'article_id': article_id,
+                'was_updated': was_updated,
+                'error': None,
+                'article_data': article_data
+            }
+        except Exception as db_error:
+            session.rollback()
+            error_msg = f"Database error: {db_error}"
+            if verbose:
+                click.echo(click.style(f"✗ {error_msg}", fg="red"))
+            return {
+                'success': False,
+                'article_id': None,
+                'was_updated': False,
+                'error': error_msg,
+                'article_data': None
+            }
+        finally:
+            session.close()
+
+    except Exception as e:
+        error_msg = str(e)
+        if verbose:
+            click.echo(click.style(f"✗ Error: {error_msg}", fg="red"))
+        return {
+            'success': False,
+            'article': None,
+            'error': error_msg,
+            'article_data': None
+        }
+
+
 @click.group()
 def article():
     """Manage news articles."""
@@ -15,20 +126,23 @@ def article():
 
 @article.command()
 @click.argument('url')
-@click.option('--cache-no-read', is_flag=True, default=False, help='Skip reading from cache, always download')
-@click.option('--cache-no-save', is_flag=True, default=False, help='Skip saving to cache after download')
-def fetch(url, cache_no_read, cache_no_save):
+@click.option('--reindex', is_flag=True, default=False, help='Fetch fresh content and update if article exists')
+@click.option('--dont-cache', is_flag=True, default=False, help='Don\'t save downloaded content to cache')
+def fetch(url, reindex, dont_cache):
     """
     Fetch and extract article from URL.
 
-    By default, uses cache for both reading and writing.
-    Use --cache-no-read to force fresh download.
-    Use --cache-no-save to prevent caching the download.
+    By default, uses cache for reading and writing, and skips articles
+    that already exist in the database.
 
-    Example:
+    --reindex: Fetch fresh content (bypass cache) and update if article exists.
+    --dont-cache: Don't save downloaded content to cache (useful for temporary URLs).
+
+    Examples:
         news article fetch "https://example.com/article"
-        news article fetch "https://example.com/article" --cache-no-read
-        news article fetch "https://example.com/article" --cache-no-read --cache-no-save
+        news article fetch "https://example.com/article" --reindex
+        news article fetch "https://example.com/article" --dont-cache
+        news article fetch "https://example.com/article" --reindex --dont-cache
     """
     try:
         domain = get_domain(url)
@@ -40,9 +154,12 @@ def fetch(url, cache_no_read, cache_no_save):
 
         # Check cache for potential redirect BEFORE checking if article exists
         # This ensures we check the final URL, not the redirect URL
+        # Skip cache check if --reindex (we'll download fresh anyway)
         from db.cache import CacheDatabase
         cache_db = CacheDatabase()
-        cached = cache_db.get_cached_content(url)
+        cached = None
+        if not reindex:
+            cached = cache_db.get_cached_content(url)
 
         # If cached and was redirected, use the final URL for existence check
         final_url = url
@@ -53,21 +170,29 @@ def fetch(url, cache_no_read, cache_no_save):
             click.echo(f"Redirect detected: {url} → {final_url}")
 
         # Check if article already exists (using final URL if redirected)
-        db = Database()
-        session = db.get_session()
-        try:
-            if db.article_exists(session, url=final_url, hash=final_hash):
-                click.echo(click.style("✓ Article already exists in database", fg="yellow"))
-                return
-        finally:
-            session.close()
+        # Skip this check if --reindex is enabled
+        if not reindex:
+            db = Database()
+            session = db.get_session()
+            try:
+                if db.article_exists(session, url=final_url, hash=final_hash):
+                    click.echo(click.style("✓ Article already exists in database", fg="yellow"))
+                    click.echo("  Use --reindex to fetch fresh content and update it")
+                    return
+            finally:
+                session.close()
 
         # Download HTML (with cache support)
-        click.echo("Downloading HTML..." if cache_no_read else "Checking cache...")
+        # If --reindex: force fresh download (don't read cache)
+        # If --dont-cache: don't save to cache
+        use_cache_read = not reindex
+        use_cache_save = not dont_cache
+
+        click.echo("Downloading fresh content..." if reindex else "Checking cache...")
         download_result = download_html(
             url,
-            use_cache_read=not cache_no_read,
-            use_cache_save=not cache_no_save,
+            use_cache_read=use_cache_read,
+            use_cache_save=use_cache_save,
             verbose=True
         )
         html_content = download_result['content']
@@ -77,50 +202,15 @@ def fetch(url, cache_no_read, cache_no_save):
         if final_url != url:
             click.echo(f"Following redirect: {url} → {final_url}")
             url = final_url
-            domain = get_domain(final_url)
-            url_hash = get_url_hash(final_url)
 
-        click.echo("Cleaning HTML...")
-        cleaned_html = clean_html(html_content)
+        # Process article using shared helper
+        result = _process_article_from_html(url, html_content, verbose=True)
 
-        # Load extractor
-        click.echo(f"Looking for extractor for {domain}...")
-        extractor = load_extractor(domain)
-
-        if extractor is None:
-            click.echo(click.style(f"✗ No extractor found for domain '{domain}'", fg="red"))
-            click.echo(f"Create file: extractors/{domain.replace('.', '_')}.py")
+        if not result['success']:
             raise click.Abort()
 
-        click.echo(click.style(f"✓ Extractor found: extractors/{domain.replace('.', '_')}.py", fg="green"))
-
-        # Extract article data
-        click.echo("Extracting article data...")
-        article_data = extractor.extract(cleaned_html, url)
-
-        # Add metadata (using final URL after redirects)
-        article_data["_metadata"] = {
-            "url": url,  # This is now the final URL
-            "domain": domain,
-            "hash": url_hash
-        }
-
-        # Save to database
-        click.echo("Saving to database...")
-        db = Database()
-        session = db.get_session()
-        try:
-            article_obj = db.save_article(session, article_data, domain)
-            session.commit()
-            click.echo(click.style(f"✓ Article saved to database (ID: {article_obj.id})", fg="green"))
-        except Exception as db_error:
-            session.rollback()
-            click.echo(click.style(f"✗ Database error: {db_error}", fg="red"))
-            raise
-        finally:
-            session.close()
-
         # Show extracted data
+        article_data = result['article_data']
         click.echo("\nExtracted data:")
         click.echo(f"  Title: {article_data.get('title', 'N/A')[:80]}...")
         click.echo(f"  Author: {article_data.get('author', 'N/A')}")
@@ -357,6 +447,127 @@ def show(article_id, full, entities, clusters):
 
     finally:
         session.close()
+
+
+@article.command()
+@click.option('--domain', '-d', help='Filter by domain')
+@click.option('--limit', '-l', type=int, help='Maximum number of articles to fetch')
+@click.option('--reindex', is_flag=True, help='Re-process and update articles that already exist')
+def fetch_cached(domain, limit, reindex):
+    """
+    Fetch and process articles from cache.
+
+    Reads cached URLs and processes them into the main database.
+    By default, skips articles that already exist in the database.
+
+    --domain: Filter by specific domain.
+    --limit: Maximum number of articles to process.
+    --reindex: Re-process and update articles that already exist.
+
+    Examples:
+        news article fetch-cached
+        news article fetch-cached --domain diariolibre.com
+        news article fetch-cached --limit 50
+        news article fetch-cached --reindex
+    """
+    from db.cache import CacheDatabase
+
+    cache_db = CacheDatabase()
+
+    # Get cached URLs
+    click.echo("Loading cached URLs...")
+    cached_entries = cache_db.list_entries(domain=domain, limit=limit if limit else None)
+
+    if not cached_entries:
+        if domain:
+            click.echo(click.style(f"✗ No cached URLs found for domain '{domain}'", fg="yellow"))
+        else:
+            click.echo(click.style("✗ No cached URLs found", fg="yellow"))
+        return
+
+    total = len(cached_entries)
+    click.echo(f"Found {total} cached URL(s)")
+
+    # Filter out redirects (30x status codes) since they don't contain article content
+    article_entries = [e for e in cached_entries if not (300 <= e['status_code'] < 400)]
+    redirect_count = total - len(article_entries)
+
+    if redirect_count > 0:
+        click.echo(f"Skipping {redirect_count} redirect(s)")
+
+    if not article_entries:
+        click.echo(click.style("✗ No article URLs to process (all are redirects)", fg="yellow"))
+        return
+
+    click.echo(f"\nProcessing {len(article_entries)} article(s)...\n")
+
+    # Statistics
+    created = 0
+    updated = 0
+    skipped = 0
+    errors = 0
+
+    db = Database()
+
+    for i, entry in enumerate(article_entries, 1):
+        url = entry['url']
+
+        click.echo(f"[{i}/{len(article_entries)}] {url}")
+
+        try:
+            # Check if already exists (skip unless --reindex is set)
+            if not reindex:
+                session = db.get_session()
+                try:
+                    url_hash = get_url_hash(url)
+                    if db.article_exists(session, url=url, hash=url_hash):
+                        click.echo(click.style("  ⊘ Already exists, skipping", fg="yellow"))
+                        skipped += 1
+                        continue
+                finally:
+                    session.close()
+
+            # Get cached content
+            cached = cache_db.get_cached_content(url)
+            if not cached:
+                click.echo(click.style("  ✗ Cache entry disappeared", fg="red"))
+                errors += 1
+                continue
+
+            html_content = cached['content']
+
+            # Process article using shared helper (verbose=False for cleaner output)
+            result = _process_article_from_html(url, html_content, verbose=False)
+
+            if result['success']:
+                if result['was_updated']:
+                    click.echo(click.style(f"  ↻ Updated (ID: {result['article_id']})", fg="cyan"))
+                    updated += 1
+                else:
+                    click.echo(click.style(f"  ✓ Created (ID: {result['article_id']})", fg="green"))
+                    created += 1
+            else:
+                click.echo(click.style(f"  ✗ {result['error']}", fg="red"))
+                errors += 1
+
+        except Exception as e:
+            click.echo(click.style(f"  ✗ Error: {e}", fg="red"))
+            errors += 1
+
+    # Summary
+    total_processed = created + updated
+    click.echo(f"\n{click.style('Summary:', bold=True)}")
+    if created > 0:
+        click.echo(f"  Created: {click.style(str(created), fg='green')}")
+    if updated > 0:
+        click.echo(f"  Updated: {click.style(str(updated), fg='cyan')}")
+    if skipped > 0:
+        click.echo(f"  Skipped: {click.style(str(skipped), fg='yellow')}")
+    if errors > 0:
+        click.echo(f"  Errors: {click.style(str(errors), fg='red')}")
+
+    if total_processed > 0:
+        click.echo(click.style(f"\n✓ Successfully processed {total_processed} article(s)!", fg="green"))
 
 
 @article.command()
