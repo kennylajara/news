@@ -339,23 +339,39 @@ count = cache_db.clear_cache(domain='diariolibre.com')
 
 Ubicación: `src/get_news.py`
 
+**Retorna un diccionario** con el contenido HTML y la URL final después de seguir redirecciones.
+
 ```python
 from get_news import download_html
 
 # Descarga con caché (default)
-html = download_html(url)
+result = download_html(url)
+html = result['content']        # HTML content
+final_url = result['final_url'] # URL final después de redirecciones
 
 # Descarga sin leer caché
-html = download_html(url, use_cache_read=False)
+result = download_html(url, use_cache_read=False)
 
 # Descarga sin guardar en caché
-html = download_html(url, use_cache_save=False)
+result = download_html(url, use_cache_save=False)
 
 # Modo verbose (imprime operaciones de caché)
-html = download_html(url, verbose=True)
+result = download_html(url, verbose=True)
 # Output:
-# ✓ Loaded from cache (saved 2025-01-15 10:30)
-# ✓ Saved to cache
+# ✓ Loaded from cache (saved 2025-01-15 10:30, status: 200)
+# ✓ Saved to cache: redirect http://... -> https://...
+
+# Detectar si hubo redirección
+if result['final_url'] != url:
+    print(f"Redirected: {url} → {result['final_url']}")
+```
+
+**Valor de retorno:**
+```python
+{
+    'content': str,      # HTML content
+    'final_url': str     # Final URL after following redirects (may equal original URL)
+}
 ```
 
 ## Casos de Uso
