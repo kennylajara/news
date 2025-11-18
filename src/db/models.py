@@ -172,6 +172,7 @@ class Article(Base):
     content = Column(Text, nullable=False)
     category = Column(String(255))
     html_path = Column(String(500))
+    cleaned_html_hash = Column(String(64), nullable=True)  # SHA-256 hash of cleaned HTML (for change detection)
 
     enriched_at = Column(DateTime, nullable=True, index=True)
     cluster_enriched_at = Column(DateTime, nullable=True, index=True)

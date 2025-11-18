@@ -68,6 +68,7 @@ Artículos de noticias completos con metadata.
 | location | VARCHAR(255) | | Ciudad de origen |
 | category | VARCHAR(255) | | Categoría/Subcategoría |
 | content | TEXT | NOT NULL | Contenido en formato Markdown |
+| cleaned_html_hash | VARCHAR(64) | NULLABLE | SHA-256 del HTML limpio (detección de cambios) |
 | enriched_at | DATETIME | NULLABLE, INDEX | Fecha de enriquecimiento (NULL = no enriquecido) |
 | created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Fecha de creación en DB |
 | updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
@@ -496,11 +497,18 @@ Este método implementa el patrón "upsert" (create or update) para artículos:
 3. Si no existe: **crea** nuevo artículo
 4. Retorna tupla `(Article, was_updated: bool)`
 
+**Detección inteligente de cambios de contenido:**
+- Compara el `cleaned_html_hash` (SHA-256 del HTML limpio) entre el artículo existente y el nuevo
+- Si el hash **es diferente** o no existe: resetea `enriched_at` y `cluster_enriched_at` (requiere re-procesamiento)
+- Si el hash **es idéntico**: preserva el estado de enriquecimiento (evita re-procesamiento innecesario)
+- Se puede forzar el reseteo con `force_reprocess=True` (útil al mejorar algoritmos de enriquecimiento: NER, clustering, ...)
+
 **Ventajas sobre `save_article()`:**
 - ✅ No falla si el artículo ya existe (idempotente)
 - ✅ Permite re-procesar artículos sin errores
 - ✅ Útil para actualizar contenido que cambió en el sitio
 - ✅ Indica si fue creación o actualización
+- ✅ Evita re-enriquecimiento innecesario cuando el contenido no cambió
 
 **Cuándo usar cada uno:**
 
@@ -520,7 +528,8 @@ article_data = {
     "_metadata": {
         "url": "https://example.com/article",
         "domain": "example.com",
-        "hash": "abc123def456..."
+        "hash": "abc123def456...",
+        "cleaned_html_hash": "def789abc123..."  # SHA-256 del HTML limpio
     }
 }
 
@@ -528,22 +537,36 @@ article_data = {
 article, was_updated = db.save_or_update_article(session, article_data, "example.com")
 print(f"Created: {article.id}")  # was_updated = False
 
-# Segunda vez (mismo hash/URL): actualiza
-article_data["title"] = "Título modificado"
+# Segunda vez (mismo hash/URL, mismo contenido): actualiza pero preserva enriquecimiento
 article, was_updated = db.save_or_update_article(session, article_data, "example.com")
-print(f"Updated: {article.id}")  # was_updated = True
+print(f"Updated: {article.id}")  # was_updated = True, enriched_at preservado
+
+# Tercera vez (contenido cambió): actualiza y resetea enriquecimiento
+article_data["_metadata"]["cleaned_html_hash"] = "xyz999..."  # Hash diferente
+article, was_updated = db.save_or_update_article(session, article_data, "example.com")
+print(f"Updated: {article.id}")  # enriched_at = None (requiere re-procesamiento)
+
+# Forzar reseteo (útil al mejorar algoritmos)
+article, was_updated = db.save_or_update_article(
+    session, article_data, "example.com", force_reprocess=True
+)
+# enriched_at = None (incluso si el contenido no cambió)
 ```
 
 **Campos actualizados:**
 - `title`, `subtitle`, `author`, `published_date`, `location`
-- `content`, `category`
+- `content`, `category`, `cleaned_html_hash`
 - `tags` (se reemplazan completamente)
 - `updated_at` (automático)
+
+**Campos actualizados condicionalmente:**
+- `enriched_at`, `cluster_enriched_at`: se resetean a NULL solo si:
+  - El contenido cambió (hashes diferentes), **O**
+  - Se especificó `force_reprocess=True`
 
 **Campos NO actualizados:**
 - `id` (preserva el ID original)
 - `created_at` (preserva fecha de creación original)
-- `enriched_at`, `cluster_enriched_at` (preserva estado de procesamiento)
 
 ## Cascade Deletes
 

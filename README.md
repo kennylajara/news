@@ -15,6 +15,7 @@ Este proyecto descarga noticias de diversos medios digitales, extrae su contenid
 - **Conversión a Markdown**: El contenido se procesa preservando formato (negritas, enlaces, títulos)
 - **Base de datos SQLite**: Almacenamiento estructurado con relaciones (fuentes, artículos, tags)
 - **Deduplicación**: No reprocesa artículos ya descargados
+- **Detección de cambios**: Compara hashes del HTML limpio para evitar re-enriquecimiento innecesario
 
 ### Procesamiento Avanzado con IA
 - **Clustering semántico**: Agrupa oraciones por similitud temática (UMAP + HDBSCAN)
@@ -110,12 +111,14 @@ uv run news domain --help       # Ver comandos de dominios
 ```bash
 # Descargar artículo individual (usa caché automáticamente)
 uv run news article fetch "<URL>"
-uv run news article fetch "<URL>" --reindex      # Actualizar si ya existe
-uv run news article fetch "<URL>" --dont-cache   # No guardar en caché
+uv run news article fetch "<URL>" --reindex              # Actualizar si ya existe
+uv run news article fetch "<URL>" --reindex --force-enrichment  # Forzar re-enriquecimiento
+uv run news article fetch "<URL>" --dont-cache           # No guardar en caché
 
 # Procesar artículos desde caché (sin descargar)
 uv run news article fetch-cached                          # Solo nuevos
 uv run news article fetch-cached --reindex                # Actualizar existentes
+uv run news article fetch-cached --reindex --force-enrichment  # Forzar re-enriquecimiento
 uv run news article fetch-cached --domain diariolibre.com # Filtrar dominio
 uv run news article fetch-cached --limit 50               # Limitar cantidad
 
@@ -243,7 +246,6 @@ uv run news entity search "Luis"
 
 ## Roadmap
 
-- No enriquecer si se detecta que en nuevo contenido limpiado es identico al anterior
 - NER puede crear alias de nombres de personas y organizaciones automáticamente (nombres, apellidos e iniciales).
 - Forzar NER a detectar referencias aprobadas
 - Hacer que la IA pueda revisar hacer review de las entidades (con flag --auto-accept)
@@ -253,7 +255,6 @@ uv run news entity search "Luis"
 - Comentarios por entidades
 - Sistema de publicación automática
 - Descarga asíncrona con aiohttp
-- Auto-agregar punto final
 - Validar calidad de la información extraída (validar el JSON tras extracción)
 - Entidades canónicas (unir 2 entidades) 
 - Desambiguación de entidades (una entidad puede referenciar a más de 2)

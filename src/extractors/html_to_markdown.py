@@ -9,6 +9,33 @@ import re
 from bs4 import BeautifulSoup, NavigableString
 
 
+def ensure_period(text):
+    """
+    Asegura que el texto termine con punto final si no tiene puntuación de cierre.
+
+    Args:
+        text: String de texto
+
+    Returns:
+        Texto con punto final si es necesario
+    """
+    if not text:
+        return text
+
+    text = text.strip()
+    if not text:
+        return text
+
+    # Puntuación de cierre válida
+    ending_punctuation = ('.', '!', '?', '…', ':', ';', ')', ']', '"', "'", '»')
+
+    # Si no termina con puntuación de cierre, agregar punto
+    if not text.endswith(ending_punctuation):
+        return text + '.'
+
+    return text
+
+
 def normalize_inline_spaces(element):
     """
     Normaliza espacios en etiquetas inline.
@@ -107,7 +134,8 @@ def process_inline_formatting(element):
 
 def process_paragraph(p_element):
     """Procesa un párrafo preservando formato inline (negritas, enlaces)."""
-    return process_inline_formatting(p_element)
+    text = process_inline_formatting(p_element)
+    return ensure_period(text)
 
 
 def extract_article_content(detail_body, exclude_classes=None):
@@ -148,11 +176,13 @@ def extract_article_content(detail_body, exclude_classes=None):
             elif element.name == 'h2':
                 # Procesar h2 con formato inline para preservar espacios
                 text = process_inline_formatting(element)
+                text = ensure_period(text)
                 if text:
                     content_parts.append(f"\n## {text}\n")
 
             elif element.name == 'h3':
                 text = element.get_text(strip=True)
+                text = ensure_period(text)
                 if text:
                     content_parts.append(f"\n### {text}\n")
 
@@ -161,6 +191,7 @@ def extract_article_content(detail_body, exclude_classes=None):
                 items = element.find_all('li')
                 for item in items:
                     text = process_inline_formatting(item)
+                    text = ensure_period(text)
                     if text:
                         content_parts.append(f"- {text}\n")
 

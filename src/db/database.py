@@ -143,7 +143,8 @@ class Database:
             location=article_data.get('location'),
             content=article_data.get('content', ''),
             category=article_data.get('category'),
-            html_path=None  # Will be set by caller if needed
+            html_path=None,  # Will be set by caller if needed
+            cleaned_html_hash=article_data['_metadata'].get('cleaned_html_hash')
         )
 
         session.add(article)
@@ -159,7 +160,7 @@ class Database:
 
         return article
 
-    def save_or_update_article(self, session: Session, article_data: dict, source_domain: str) -> tuple[Article, bool]:
+    def save_or_update_article(self, session: Session, article_data: dict, source_domain: str, force_reprocess: bool = False) -> tuple[Article, bool]:
         """
         Save article to database or update if it already exists.
 
@@ -167,6 +168,7 @@ class Database:
             session: Database session
             article_data: Dictionary with article data
             source_domain: Domain of the source
+            force_reprocess: If True, always reset enrichment status even if content hasn't changed
 
         Returns:
             Tuple of (Article object, was_updated: bool)
@@ -174,6 +176,7 @@ class Database:
         """
         article_hash = article_data['_metadata']['hash']
         article_url = article_data['_metadata']['url']
+        new_cleaned_html_hash = article_data['_metadata'].get('cleaned_html_hash')
 
         # Check if article exists by hash or URL
         existing = session.query(Article).filter(
@@ -195,6 +198,14 @@ class Database:
                 except (ValueError, TypeError):
                     pass
 
+            # Check if content actually changed by comparing cleaned HTML hashes
+            content_changed = (
+                force_reprocess or
+                new_cleaned_html_hash is None or
+                existing.cleaned_html_hash is None or
+                new_cleaned_html_hash != existing.cleaned_html_hash
+            )
+
             # Update fields
             existing.hash = article_hash
             existing.url = article_url
@@ -206,11 +217,13 @@ class Database:
             existing.location = article_data.get('location')
             existing.content = article_data.get('content', '')
             existing.category = article_data.get('category')
+            existing.cleaned_html_hash = new_cleaned_html_hash
             existing.updated_at = datetime.utcnow()
 
-            # Reset enrichment status (article needs to be re-processed)
-            existing.enriched_at = None
-            existing.cluster_enriched_at = None
+            # Only reset enrichment status if content actually changed
+            if content_changed:
+                existing.enriched_at = None
+                existing.cluster_enriched_at = None
 
             # Update tags: clear existing and add new ones
             existing.tags.clear()

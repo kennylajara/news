@@ -2,12 +2,13 @@
 Article management commands.
 """
 
+import hashlib
 import click
 from db import Database, Article, Tag
 from get_news import get_domain, get_url_hash, download_html, clean_html, load_extractor
 
 
-def _process_article_from_html(url, html_content, verbose=True):
+def _process_article_from_html(url, html_content, verbose=True, force_reprocess=False):
     """
     Process article from HTML content.
 
@@ -17,6 +18,7 @@ def _process_article_from_html(url, html_content, verbose=True):
         url: Article URL (should be final URL after redirects)
         html_content: Raw HTML content
         verbose: Whether to print progress messages
+        force_reprocess: If True, always reset enrichment status even if content hasn't changed
 
     Returns:
         Dictionary with:
@@ -33,6 +35,9 @@ def _process_article_from_html(url, html_content, verbose=True):
         if verbose:
             click.echo("Cleaning HTML...")
         cleaned_html = clean_html(html_content)
+
+        # Calculate SHA-256 hash of cleaned HTML for change detection
+        cleaned_html_hash = hashlib.sha256(cleaned_html.encode('utf-8')).hexdigest()
 
         # Load extractor
         if verbose:
@@ -63,7 +68,8 @@ def _process_article_from_html(url, html_content, verbose=True):
         article_data["_metadata"] = {
             "url": url,
             "domain": domain,
-            "hash": url_hash
+            "hash": url_hash,
+            "cleaned_html_hash": cleaned_html_hash
         }
 
         # Save to database (or update if exists)
@@ -72,7 +78,7 @@ def _process_article_from_html(url, html_content, verbose=True):
         db = Database()
         session = db.get_session()
         try:
-            article_obj, was_updated = db.save_or_update_article(session, article_data, domain)
+            article_obj, was_updated = db.save_or_update_article(session, article_data, domain, force_reprocess=force_reprocess)
             session.commit()
 
             # Extract ID before closing session
@@ -128,7 +134,8 @@ def article():
 @click.argument('url')
 @click.option('--reindex', is_flag=True, default=False, help='Fetch fresh content and update if article exists')
 @click.option('--dont-cache', is_flag=True, default=False, help='Don\'t save downloaded content to cache')
-def fetch(url, reindex, dont_cache):
+@click.option('--force-enrichment', is_flag=True, default=False, help='Force re-enrichment even if content hasn\'t changed')
+def fetch(url, reindex, dont_cache, force_enrichment):
     """
     Fetch and extract article from URL.
 
@@ -204,7 +211,7 @@ def fetch(url, reindex, dont_cache):
             url = final_url
 
         # Process article using shared helper
-        result = _process_article_from_html(url, html_content, verbose=True)
+        result = _process_article_from_html(url, html_content, verbose=True, force_reprocess=force_enrichment)
 
         if not result['success']:
             raise click.Abort()
@@ -453,7 +460,8 @@ def show(article_id, full, entities, clusters):
 @click.option('--domain', '-d', help='Filter by domain')
 @click.option('--limit', '-l', type=int, help='Maximum number of articles to fetch')
 @click.option('--reindex', is_flag=True, help='Re-process and update articles that already exist')
-def fetch_cached(domain, limit, reindex):
+@click.option('--force-enrichment', is_flag=True, default=False, help='Force re-enrichment even if content hasn\'t changed')
+def fetch_cached(domain, limit, reindex, force_enrichment):
     """
     Fetch and process articles from cache.
 
@@ -537,7 +545,7 @@ def fetch_cached(domain, limit, reindex):
             html_content = cached['content']
 
             # Process article using shared helper (verbose=False for cleaner output)
-            result = _process_article_from_html(url, html_content, verbose=False)
+            result = _process_article_from_html(url, html_content, verbose=False, force_reprocess=force_enrichment)
 
             if result['success']:
                 if result['was_updated']:
