@@ -218,18 +218,60 @@ def show(url_or_hash):
 
 @cache.command()
 @click.option('--domain', '-d', default=None, help='Only clear cache for this domain')
-@click.confirmation_option(prompt='Are you sure you want to clear the cache?')
-def clear(domain):
+@click.option('--article', '-a', default=None, help='Delete specific article by URL or hash')
+@click.option('--yes', '-y', is_flag=True, help='Skip confirmation prompt')
+def clear(domain, article, yes):
     """
     Clear cache entries.
 
-    By default, clears ALL cache. Use --domain to clear only specific domain.
+    By default, clears ALL cache. Use --domain to clear only specific domain,
+    or --article to delete a specific URL.
 
     Example:
         news cache clear
         news cache clear --domain diariolibre.com
+        news cache clear --article "https://example.com/article"
+        news cache clear --article abc123def456
+        news cache clear --yes  # Skip confirmation
     """
     cache_db = CacheDatabase()
+
+    # Can't use both --domain and --article
+    if domain and article:
+        click.echo(click.style("✗ Cannot use --domain and --article together", fg="red"))
+        return
+
+    # Delete specific article
+    if article:
+        # Get the entry first to show what we're deleting
+        cached = cache_db.get_cached_content(article)
+        if not cached:
+            cached = cache_db.get_by_hash(article)
+
+        if not cached:
+            click.echo(click.style(f"✗ Article not found in cache", fg="red"))
+            return
+
+        # Show what will be deleted and confirm
+        click.echo(f"\nAbout to delete:")
+        click.echo(f"  URL: {cached['url']}")
+        click.echo(f"  Domain: {cached['domain']}")
+        click.echo(f"  Hash: {cached['url_hash'][:16]}...")
+
+        if not yes and not click.confirm('\nAre you sure you want to delete this cached article?'):
+            click.echo(click.style("Cancelled", fg="yellow"))
+            return
+
+        if cache_db.delete_by_url_or_hash(article):
+            click.echo(click.style(f"✓ Deleted cached article", fg="green"))
+        else:
+            click.echo(click.style(f"✗ Failed to delete article", fg="red"))
+        return
+
+    # Clear by domain or all
+    if not yes and not click.confirm('Are you sure you want to clear the cache?'):
+        click.echo(click.style("Cancelled", fg="yellow"))
+        return
 
     if domain:
         count = cache_db.clear_cache(domain=domain)

@@ -323,6 +323,45 @@ class CacheDatabase:
         finally:
             session.close()
 
+    def delete_by_url_or_hash(self, url_or_hash: str) -> bool:
+        """
+        Delete a specific cache entry by URL or hash.
+
+        Args:
+            url_or_hash: Either the full URL or the URL hash (full or partial, min 8 chars)
+
+        Returns:
+            True if entry was deleted, False if not found
+        """
+        session = self._get_session()
+        try:
+            # Try as URL first
+            url_hash = self.compute_url_hash(url_or_hash)
+            entry = session.query(URLCache).filter_by(url_hash=url_hash).first()
+
+            # If not found, try as hash (exact or partial)
+            if not entry:
+                if len(url_or_hash) >= 8:
+                    # Try exact match first
+                    entry = session.query(URLCache).filter_by(url_hash=url_or_hash).first()
+
+                    # Try prefix match if still not found
+                    if not entry:
+                        entry = session.query(URLCache).filter(
+                            URLCache.url_hash.like(f'{url_or_hash}%')
+                        ).first()
+
+            if entry:
+                session.delete(entry)
+                session.commit()
+                return True
+            return False
+        except Exception:
+            session.rollback()
+            return False
+        finally:
+            session.close()
+
     def clear_cache(self, domain: Optional[str] = None) -> int:
         """
         Clear cache entries.
