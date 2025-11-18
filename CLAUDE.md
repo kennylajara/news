@@ -32,38 +32,79 @@ Este archivo proporciona reglas y buenas prácticas para Claude Code al trabajar
 - Los comandos CLI ya manejan sesiones correctamente
 - **TODAS las tablas deben tener `created_at` y `updated_at` indexados** - son campos críticos para búsquedas y ordenamiento
 
-#### Sistema de Caché
+#### Sistema de Caché y Comandos de Descarga
 
 - **Dos bases de datos separadas**:
   - `data/news.db` - Base de datos principal (artículos procesados, entidades, clusters, etc.)
   - `data/cache.db` - Caché de contenido HTML original de URLs
-- **El caché es tu amigo durante desarrollo**:
-  - Si necesitas recrear `news.db` para probar cambios de schema, **PRIMERO verifica el caché**
-  - Usa `uv run news cache stats` para ver qué URLs ya están descargadas
-  - Usa `uv run news cache domains` para ver qué dominios tienes cacheados
-  - **NUNCA borres `cache.db` a menos que sea absolutamente necesario** - contiene descargas HTTP que pueden no estar disponibles después
-- **Workflows recomendados**:
-  ```bash
-  # Antes de recrear news.db, verificar qué tienes en caché
-  uv run news cache stats
-  uv run news cache domains
 
-  # Ver URLs cacheadas para un dominio específico
-  uv run news cache list --domain diariolibre.com
-  uv run news cache list --limit 50  # Ver más URLs
+##### Comandos de descarga: `fetch` vs `fetch-cached`
 
-  # Recrear news.db y repoblar desde caché (MUY RÁPIDO)
-  rm data/news.db
-  # Copia las URLs del output de 'cache list' y úsalas:
-  uv run news article fetch "<URL-del-cache>"  # Lee del caché automáticamente
+**Regla general**: **SIEMPRE preferir `fetch-cached` sobre `fetch` cuando sea posible**
 
-  # Ver detalles de un URL específico (incluyendo preview del HTML)
-  uv run news cache show "<URL>"
-  ```
-- **Cuándo forzar descarga fresca**:
-  - Usa `--cache-no-read` solo si el sitio actualizó el contenido
-  - Usa `--cache-no-save` para URLs temporales (con tokens, firmas, etc.)
-- **Ver `docs/cache.md`** para detalles completos del sistema de caché
+| Comando | Cuándo usar | Velocidad | Red |
+|---------|-------------|-----------|-----|
+| `fetch` | URLs nuevas que NO están en caché | Lento (descarga HTTP) | Requiere |
+| `fetch-cached` | Procesar URLs que YA están en caché | ⚡ MUY RÁPIDO | No requiere |
+
+**Workflow recomendado para desarrollo**:
+
+```bash
+# 1. Verificar qué tienes en caché ANTES de descargar
+uv run news cache stats
+uv run news cache domains
+uv run news cache list --domain diariolibre.com
+uv run news cache list --limit 50
+
+# 2. Procesar artículos desde caché (PREFERIR ESTO)
+uv run news article fetch-cached                           # Todos los cacheados
+uv run news article fetch-cached --domain diariolibre.com  # Solo un dominio
+uv run news article fetch-cached --limit 50                # Limitar cantidad
+
+# 3. Solo si necesitas URLs nuevas, usa fetch
+uv run news article fetch "<URL-nueva>"
+
+# 4. Re-indexar artículos (actualizar sin perder enriquecimiento si contenido no cambió)
+uv run news article fetch-cached --reindex                 # Desde caché
+uv run news article fetch "<URL>" --reindex                # Forzar descarga fresca
+
+# 5. Forzar re-enriquecimiento (útil después de mejorar algoritmos de NER/clustering)
+uv run news article fetch-cached --reindex --force-enrichment
+```
+
+**Detección inteligente de cambios de contenido**:
+- Al re-indexar (`--reindex`), el sistema compara el hash del HTML limpio
+- Si el contenido **no cambió**: preserva `enriched_at` (evita re-procesamiento innecesario)
+- Si el contenido **cambió**: resetea `enriched_at` (requiere re-enriquecimiento)
+- Usa `--force-enrichment` para forzar reseteo incluso si el contenido no cambió (util para testear algoritmos de enriquecimiento como NER o Semantic Clustering)
+
+**Recrear `news.db` desde caché (workflow completo)**:
+
+```bash
+# 1. Verificar qué tienes en caché
+uv run news cache stats
+uv run news cache domains
+
+# 2. Recrear news.db
+rm data/news.db
+
+# 3. Repoblar desde caché (MUY RÁPIDO - sin descargas HTTP)
+uv run news article fetch-cached --domain diariolibre.com
+# O procesar todos los dominios:
+uv run news article fetch-cached
+```
+
+**Cuándo usar flags de caché en `fetch`**:
+- `--reindex`: Actualizar artículo existente (descarga fresca, compara contenido)
+- `--dont-cache`: No guardar en caché (URLs temporales con tokens/firmas)
+- `--force-enrichment`: Forzar re-enriquecimiento incluso si contenido no cambió
+
+**IMPORTANTE**:
+- **NUNCA borres `cache.db` si no es estrictamente necesario** - contiene descargas HTTP que pueden no estar disponibles después
+- **SIEMPRE usa `fetch-cached`** para repoblar `news.db` - es 10-100x más rápido
+- Solo usa `fetch` para URLs que NO están en caché
+
+**Ver `docs/cache.md`** para detalles completos del sistema de caché
 
 ### 5. Extractores
 
@@ -171,20 +212,40 @@ cp .env.example .env  # Configurar API keys
 
 # Ejecutar CLI
 uv run news --help
-uv run news article fetch "<URL>"
 uv run news article list
 uv run news domain stats
 
-# Gestión de caché (ÚTIL PARA DESARROLLO)
-uv run news cache stats                        # Ver estadísticas generales
-uv run news cache domains                 # Ver dominios cacheados
-uv run news cache list                         # Ver URLs cacheadas (últimas 20)
-uv run news cache list --domain example.com    # Filtrar por dominio
-uv run news cache list --limit 50              # Ver más URLs
-uv run news cache show "<URL>"                 # Ver detalles + preview HTML
-uv run news cache clear --domain example.com   # Limpiar caché de un dominio
+# ============================================
+# DESCARGA DE ARTÍCULOS (preferir fetch-cached)
+# ============================================
 
-# Procesar artículos con IA
+# 1. Verificar qué hay en caché
+uv run news cache stats
+uv run news cache domains
+uv run news cache list --domain diariolibre.com
+
+# 2. Procesar desde caché (PREFERIR - muy rápido)
+uv run news article fetch-cached                           # Todos
+uv run news article fetch-cached --domain diariolibre.com  # Por dominio
+uv run news article fetch-cached --limit 50                # Con límite
+
+# 3. Descargar URL nueva (solo si no está en caché)
+uv run news article fetch "<URL>"
+
+# 4. Re-indexar (actualizar artículos existentes)
+uv run news article fetch-cached --reindex                          # Desde caché
+uv run news article fetch-cached --reindex --force-enrichment       # Forzar re-enriquecimiento
+uv run news article fetch "<URL>" --reindex                         # Descarga fresca
+
+# 5. Limpiar caché (rara vez necesario)
+uv run news cache show "<URL>"                 # Ver detalles
+uv run news cache clear --domain example.com   # Limpiar dominio
+uv run news cache clear --article "<URL>"      # Limpiar URL específica
+
+# ============================================
+# PROCESAMIENTO CON IA
+# ============================================
+
 # Paso 1: Enriquecimiento base (clustering + NER)
 uv run news process start -d diariolibre.com -t enrich_article -s 10
 
@@ -194,13 +255,20 @@ uv run news process start -d diariolibre.com -t generate_flash_news -s 10
 # Ver flash news generados
 uv run news flash list
 
+# ============================================
+# ENTIDADES Y RELEVANCIA
+# ============================================
+
 # Calcular relevancia global de entidades (PageRank)
 uv run news entity rerank
 uv run news entity list --order-by global_rank --limit 20
 
-# Acceso directo a base de datos
-sqlite3 data/news.db
-sqlite3 data/cache.db  # Ver URLs cacheadas
+# ============================================
+# ACCESO DIRECTO A BASE DE DATOS
+# ============================================
+
+sqlite3 data/news.db      # Base principal
+sqlite3 data/cache.db     # Caché de HTML
 ```
 
 ## Notas Importantes
