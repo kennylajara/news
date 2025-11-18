@@ -147,13 +147,16 @@ class Database:
         )
 
         session.add(article)
-        session.flush()  # Get article ID before adding tags
 
-        # Add tags
-        for tag_name in article_data.get('tags', []):
-            if tag_name:  # Skip empty tags
-                tag = self.get_or_create_tag(session, tag_name)
-                article.tags.append(tag)
+        # Add tags with autoflush disabled to ensure atomic transaction
+        # This prevents SQLAlchemy from flushing the article before all tags are added
+        # If any tag operation fails, the entire transaction (article + tags) will rollback
+        with session.no_autoflush:
+            for tag_name in article_data.get('tags', []):
+                if tag_name:  # Skip empty tags
+                    tag = self.get_or_create_tag(session, tag_name)
+                    article.tags.append(tag)
+
         return article
 
     def get_article_by_hash(self, session: Session, hash: str) -> Article:

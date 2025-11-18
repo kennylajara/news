@@ -5,7 +5,7 @@ CLI for news portal.
 
 import click
 from importlib.metadata import version
-from commands import article, domain, entity, flash, process
+from commands import article, domain, entity, flash, process, cache
 
 
 @click.group()
@@ -17,6 +17,7 @@ def cli():
 
 # Register command groups
 cli.add_command(article.article)
+cli.add_command(cache.cache)
 cli.add_command(domain.domain)
 cli.add_command(entity.entity)
 cli.add_command(flash.flash)

@@ -3,7 +3,7 @@
 ## Flujo de Componentes
 
 ```
-Usuario → CLI (Click) → get_news.py → Extractor (plugin) → Database (SQLite)
+Usuario → CLI (Click) → get_news.py → Cache DB (opcional) → HTTP Download → Extractor (plugin) → Main Database (SQLite)
 ```
 
 ### Archivos Clave
@@ -14,20 +14,24 @@ Usuario → CLI (Click) → get_news.py → Extractor (plugin) → Database (SQL
 - `src/commands/process.py` - Comandos de procesamiento por batches (clustering, NER, flash news)
 - `src/commands/entity.py` - Comandos de gestión de entidades nombradas
 - `src/commands/flash.py` - Comandos de gestión de flash news
+- `src/commands/cache.py` - Comandos de gestión de caché de URLs
 - `src/get_news.py` - Orquestación principal: descargar → limpiar → extraer → guardar
 - `src/db/database.py` - Fachada de base de datos con operaciones CRUD
 - `src/db/models.py` - Modelos SQLAlchemy (Source, Article, Tag, NamedEntity, ArticleCluster, FlashNews, etc.)
+- `src/db/cache.py` - Base de datos de caché para contenido HTML de URLs
 - `src/extractors/{domain}_com.py` - Extractores de contenido específicos por dominio
 - `src/domain/enrich_article.py` - Procesamiento: clustering semántico + NER
 - `src/domain/generate_flash_news.py` - Generación de resúmenes narrativos con LLM
 
 ## Pipeline de Descarga de Artículos
 
-1. **Descarga**: HTTP GET con encabezado User-Agent
-2. **Limpieza**: Eliminar scripts, estilos, formularios, comentarios; normalizar espacios; preservar solo atributos id/class/href
-3. **Extracción**: Cargar extractor específico del dominio vía importación dinámica
-4. **Parseo**: Usar selectores CSS para extraer datos estructurados, convertir HTML → Markdown
-5. **Almacenamiento**: Guardar en SQLite con relaciones (source, tags)
+1. **Verificación de Caché**: Verificar si existe en cache.db (a menos que se use `--cache-no-read`)
+2. **Descarga**: HTTP GET con encabezado User-Agent (si no está en caché)
+3. **Guardado en Caché**: Guardar HTML original en cache.db (a menos que se use `--cache-no-save`)
+4. **Limpieza**: Eliminar scripts, estilos, formularios, comentarios; normalizar espacios; preservar solo atributos id/class/href
+5. **Extracción**: Cargar extractor específico del dominio vía importación dinámica
+6. **Parseo**: Usar selectores CSS para extraer datos estructurados, convertir HTML → Markdown
+7. **Almacenamiento**: Guardar en news.db con relaciones (source, tags)
 
 ## Base de Datos
 
@@ -98,13 +102,62 @@ batch_items (N:1 processing_batches, N:1 articles)
 
 Se usa hash SHA-256 de la URL para prevenir re-descargas. El hash es único e indexado para búsquedas rápidas.
 
+## Sistema de Caché de URLs
+
+El sistema incluye una base de datos de caché separada (`data/cache.db`) para almacenar el contenido HTML original de las URLs descargadas. Esto es especialmente útil durante desarrollo cuando se borra y re-crea la base de datos principal.
+
+### Características:
+
+- **Caché persistente**: Contenido HTML se guarda en SQLite separado
+- **Indexado por hash**: URL hash SHA-256 para búsqueda rápida
+- **Metadata**: Guarda domain, status_code, content_length, created_at, accessed_at
+- **Control granular**: Flags `--cache-no-read` y `--cache-no-save` en comandos
+- **Por defecto habilitado**: Todas las descargas usan caché automáticamente
+- **Gestión**: Comandos `news cache stats`, `news cache domains`, `news cache clear`
+
+### Esquema de cache.db:
+
+```
+url_cache
+  ├─ id (PK)
+  ├─ url_hash (SHA-256, unique, indexed)
+  ├─ url (text)
+  ├─ domain (indexed)
+  ├─ content (text, HTML original)
+  ├─ status_code (int)
+  ├─ content_length (int)
+  ├─ created_at (indexed)
+  ├─ accessed_at (indexed, actualizado en cada lectura)
+```
+
+### Uso:
+
+```bash
+# Fetch normal (usa caché)
+news article fetch "https://example.com/article"
+
+# Forzar descarga fresca (ignorar caché)
+news article fetch "https://example.com/article" --cache-no-read
+
+# Descargar pero no guardar en caché
+news article fetch "https://example.com/article" --cache-no-save
+
+# Ver estadísticas de caché
+news cache stats
+news cache stats --domain diariolibre.com
+
+# Limpiar caché
+news cache clear --domain diariolibre.com
+```
+
 ## Patrones Importantes
 
 1. **Carga dinámica de extractores**: Los extractores se importan en tiempo de ejecución según el dominio
 2. **Patrón get-or-create**: Los métodos de base de datos auto-crean Sources y Tags si no existen
 3. **Cascade deletes**: Eliminar Source remueve todos sus Articles; eliminar Article remueve asociaciones de tags
-4. **Deduplicación**: Verifica `article_exists(url, hash)` antes de descargar
-5. **Limpieza de HTML**: Pre-procesamiento agresivo elimina ruido antes de la extracción
+4. **Deduplicación de artículos**: Verifica `article_exists(url, hash)` antes de guardar en news.db
+5. **Caché de HTML**: Verifica cache.db antes de HTTP request para evitar re-descargas
+6. **Limpieza de HTML**: Pre-procesamiento agresivo elimina ruido antes de la extracción
 
 ## Estructura del Proyecto
 
@@ -112,13 +165,15 @@ Se usa hash SHA-256 de la URL para prevenir re-descargas. El hash es único e in
 src/
 ├── commands/          # Grupos de comandos CLI
 │   ├── article.py    # Comandos de artículos (fetch, list, show, delete)
+│   ├── cache.py      # Comandos de caché (stats, list-domains, clear)
 │   ├── domain.py     # Comandos de dominios (list, stats)
 │   ├── process.py    # Comandos de procesamiento (start, list, show)
 │   ├── entity.py     # Comandos de entidades (list, show, stats)
 │   └── flash.py      # Comandos de flash news (list, show, publish, stats)
 ├── db/               # Modelos de base de datos y operaciones
-│   ├── models.py     # Modelos SQLAlchemy
-│   └── database.py   # Fachada CRUD
+│   ├── models.py     # Modelos SQLAlchemy (news.db)
+│   ├── database.py   # Fachada CRUD (news.db)
+│   └── cache.py      # Base de datos de caché (cache.db)
 ├── domain/           # Lógica de procesamiento de dominio
 │   ├── enrich_article.py       # Clustering + NER
 │   └── generate_flash_news.py  # Generación LLM de resúmenes

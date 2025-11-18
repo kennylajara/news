@@ -8,7 +8,6 @@ from db import Database, NamedEntity, Article, EntityType, EntityClassification
 from db.models import article_entities, entity_canonical_refs, articles_needs_rerank
 from sqlalchemy import select, func, delete
 from domain.calculate_global_relevance import calculate_global_relevance
-from processors.enrich import recalculate_article_relevance
 
 
 @click.group()
@@ -989,6 +988,9 @@ def recalculate_local(limit, article_id):
     session = db.get_session()
 
     try:
+        # Lazy import heavy ML dependencies only when needed
+        from processors.enrich import recalculate_article_relevance
+
         click.echo(click.style("🔄 Recalculating local entity relevance...\n", fg="cyan", bold=True))
 
         if article_id:

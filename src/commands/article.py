@@ -15,12 +15,20 @@ def article():
 
 @article.command()
 @click.argument('url')
-def fetch(url):
+@click.option('--cache-no-read', is_flag=True, default=False, help='Skip reading from cache, always download')
+@click.option('--cache-no-save', is_flag=True, default=False, help='Skip saving to cache after download')
+def fetch(url, cache_no_read, cache_no_save):
     """
     Fetch and extract article from URL.
 
+    By default, uses cache for both reading and writing.
+    Use --cache-no-read to force fresh download.
+    Use --cache-no-save to prevent caching the download.
+
     Example:
         news article fetch "https://example.com/article"
+        news article fetch "https://example.com/article" --cache-no-read
+        news article fetch "https://example.com/article" --cache-no-read --cache-no-save
     """
     try:
         domain = get_domain(url)
@@ -30,19 +38,47 @@ def fetch(url):
         click.echo(f"Domain: {domain}")
         click.echo(f"Hash: {url_hash}")
 
-        # Check if article already exists
+        # Check cache for potential redirect BEFORE checking if article exists
+        # This ensures we check the final URL, not the redirect URL
+        from db.cache import CacheDatabase
+        cache_db = CacheDatabase()
+        cached = cache_db.get_cached_content(url)
+
+        # If cached and was redirected, use the final URL for existence check
+        final_url = url
+        final_hash = url_hash
+        if cached and cached.get('was_redirected'):
+            final_url = cached['url']
+            final_hash = get_url_hash(final_url)
+            click.echo(f"Redirect detected: {url} → {final_url}")
+
+        # Check if article already exists (using final URL if redirected)
         db = Database()
         session = db.get_session()
         try:
-            if db.article_exists(session, url=url, hash=url_hash):
+            if db.article_exists(session, url=final_url, hash=final_hash):
                 click.echo(click.style("✓ Article already exists in database", fg="yellow"))
                 return
         finally:
             session.close()
 
-        # Download and clean HTML
-        click.echo("Downloading HTML...")
-        html_content = download_html(url)
+        # Download HTML (with cache support)
+        click.echo("Downloading HTML..." if cache_no_read else "Checking cache...")
+        download_result = download_html(
+            url,
+            use_cache_read=not cache_no_read,
+            use_cache_save=not cache_no_save,
+            verbose=True
+        )
+        html_content = download_result['content']
+        final_url = download_result['final_url']
+
+        # If URL was redirected, update our variables to use the final URL
+        if final_url != url:
+            click.echo(f"Following redirect: {url} → {final_url}")
+            url = final_url
+            domain = get_domain(final_url)
+            url_hash = get_url_hash(final_url)
 
         click.echo("Cleaning HTML...")
         cleaned_html = clean_html(html_content)
@@ -62,9 +98,9 @@ def fetch(url):
         click.echo("Extracting article data...")
         article_data = extractor.extract(cleaned_html, url)
 
-        # Add metadata
+        # Add metadata (using final URL after redirects)
         article_data["_metadata"] = {
-            "url": url,
+            "url": url,  # This is now the final URL
             "domain": domain,
             "hash": url_hash
         }

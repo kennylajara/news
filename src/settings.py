@@ -55,3 +55,6 @@ OPENAI_TIMEOUT = int(get_setting('OPENAI_TIMEOUT', '30'))
 
 # Debug mode
 DEBUG = get_setting('DEBUG', 'False').lower() in ('true', '1', 'yes')
+
+# Database paths
+CACHE_DB_PATH = get_setting('CACHE_DB_PATH', 'data/cache.db')

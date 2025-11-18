@@ -10,6 +10,7 @@ Este proyecto descarga noticias de diversos medios digitales, extrae su contenid
 
 ### Extracción y Almacenamiento
 - **Extracción automática**: Descarga y limpia HTML de artículos de noticias
+- **Caché de URLs**: Sistema de caché persistente para contenido HTML (evita re-descargas)
 - **Extractores por dominio**: Cada medio tiene su propio extractor especializado
 - **Conversión a Markdown**: El contenido se procesa preservando formato (negritas, enlaces, títulos)
 - **Base de datos SQLite**: Almacenamiento estructurado con relaciones (fuentes, artículos, tags)
@@ -100,14 +101,17 @@ El proyecto incluye una CLI completa construida con Click.
 ```bash
 uv run news --help              # Ver ayuda general
 uv run news article --help      # Ver comandos de artículos
+uv run news cache --help        # Ver comandos de caché
 uv run news domain --help       # Ver comandos de dominios
 ```
 
 #### Artículos
 
 ```bash
-# Descargar artículo
+# Descargar artículo (usa caché automáticamente)
 uv run news article fetch "<URL>"
+uv run news article fetch "<URL>" --cache-no-read   # Forzar descarga fresca
+uv run news article fetch "<URL>" --cache-no-save   # No guardar en caché
 
 # Listar artículos
 uv run news article list                           # Últimos 10
@@ -124,6 +128,21 @@ uv run news article show <ID> --entities  # Ver entidades extraídas (NER)
 
 # Eliminar artículo
 uv run news article delete <ID>
+```
+
+#### Caché
+
+```bash
+# Ver estadísticas de caché
+uv run news cache stats
+uv run news cache stats --domain diariolibre.com
+
+# Listar dominios en caché
+uv run news cache domains
+
+# Limpiar caché
+uv run news cache clear --domain diariolibre.com   # Solo un dominio
+uv run news cache clear                            # Todo (requiere confirmación)
 ```
 
 ### Fuentes
@@ -190,6 +209,7 @@ uv run news entity search "Luis"
 - **[Referencia de Comandos](docs/commands.md)** - Documentación completa de todos los comandos CLI
 - **[Arquitectura](docs/architecture.md)** - Flujo de componentes, pipeline, patrones
 - **[Base de Datos](docs/database.md)** - Esquema, operaciones CRUD, deduplicación
+- **[Caché de URLs](docs/cache.md)** - Sistema de caché persistente para desarrollo
 - **[Crear Extractores](docs/extractors.md)** - Guía completa con templates y ejemplos
 - **[Procesamiento](docs/processing.md)** - Sistema de batches y NER con spaCy
 
@@ -207,9 +227,7 @@ uv run news entity search "Luis"
 ## Roadmap
 
 - NER puede crear alias de nombres de personas y organizaciones automáticamente (nombres, apellidos e iniciales).
-- Distribución inteligente del link juice en entidades ambiguas (Luis es alias de Luis Fonsi y de Luis Abinader, Luis Fonsi no es agregado de forma artificial si ya Luis Abinader fue agregado por NER)
 - Forzar NER a detectar referencias aprobadas
-- Cache DB (cache de artículos conocidos, util para re-indexación); add flag --no-cache en fetch
 - Hacer que la IA pueda revisar hacer review de las entidades (con flag --auto-accept)
 - Calcular relevancia de las noticias antes de publicar
 - API REST para consulta de artículos

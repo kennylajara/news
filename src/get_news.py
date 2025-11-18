@@ -93,8 +93,47 @@ def clean_html(html_content):
     return str(soup)
 
 
-def download_html(url):
-    """Descarga el HTML de una URL"""
+def download_html(url, use_cache_read=True, use_cache_save=True, verbose=False):
+    """
+    Descarga el HTML de una URL, con soporte para caché.
+
+    Args:
+        url: URL to download
+        use_cache_read: If True, try to read from cache first
+        use_cache_save: If True, save to cache after download
+        verbose: If True, print cache operations
+
+    Returns:
+        Dictionary with:
+            - 'content': HTML content as string
+            - 'final_url': Final URL after following redirects (may be same as original)
+    """
+    from db.cache import CacheDatabase
+
+    cache_db = CacheDatabase()
+
+    # Try cache first
+    if use_cache_read:
+        cached = cache_db.get_cached_content(url)
+        if cached:
+            # Check if cached response was successful
+            if cached['status_code'] >= 400:
+                error_msg = f"Cached response has error status: {cached['status_code']}"
+                if verbose:
+                    print(f"✗ {error_msg}")
+                print(error_msg)
+                sys.exit(1)
+
+            if verbose:
+                print(f"✓ Loaded from cache (saved {cached['created_at'].strftime('%Y-%m-%d %H:%M')}, status: {cached['status_code']})")
+
+            # Return final URL (which may be different if was redirected)
+            return {
+                'content': cached['content'],
+                'final_url': cached['url']  # This is already the final URL from cache
+            }
+
+    # Download from URL
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     }
@@ -102,7 +141,37 @@ def download_html(url):
     try:
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
-        return response.text
+        html_content = response.text
+
+        # Note: requests follows redirects by default (301/302/303/307/308)
+        # response.url contains the final URL after redirects
+        # response.history contains intermediate redirect responses
+        final_url = response.url
+        was_redirected = final_url != url
+
+        # Save to cache
+        if use_cache_save:
+            if was_redirected:
+                # Save TWO cache entries:
+                # 1. Original URL -> redirect entry (status 30x, content = final URL)
+                redirect_status = response.history[0].status_code if response.history else 301
+                cache_db.save_to_cache(url, final_url, status_code=redirect_status)
+
+                # 2. Final URL -> actual content (status 200, content = HTML)
+                cache_db.save_to_cache(final_url, html_content, status_code=response.status_code)
+
+                if verbose:
+                    print(f"✓ Saved to cache: redirect {url} -> {final_url}")
+            else:
+                # No redirect, save normally
+                cache_db.save_to_cache(url, html_content, status_code=response.status_code)
+                if verbose:
+                    print("✓ Saved to cache")
+
+        return {
+            'content': html_content,
+            'final_url': final_url
+        }
     except Exception as e:
         print(f"Error descargando URL: {e}")
         sys.exit(1)
@@ -150,11 +219,25 @@ def main():
     print(f"Dominio: {domain}")
     print(f"Hash: {url_hash}")
 
-    # Verificar si el artículo ya existe en la base de datos
+    # Check cache for potential redirect BEFORE checking if article exists
+    # This ensures we check the final URL, not the redirect URL
+    from db.cache import CacheDatabase
+    cache_db = CacheDatabase()
+    cached = cache_db.get_cached_content(url)
+
+    # If cached and was redirected, use the final URL for existence check
+    final_url = url
+    final_hash = url_hash
+    if cached and cached.get('was_redirected'):
+        final_url = cached['url']
+        final_hash = get_url_hash(final_url)
+        print(f"Redirect detected: {url} → {final_url}")
+
+    # Verificar si el artículo ya existe en la base de datos (using final URL)
     db = Database()
     session = db.get_session()
     try:
-        if db.article_exists(session, url=url, hash=url_hash):
+        if db.article_exists(session, url=final_url, hash=final_hash):
             print(f"✓ El artículo ya existe en la base de datos")
             print("No se procesará nuevamente.")
             session.close()
@@ -164,7 +247,16 @@ def main():
 
     # Descargar HTML
     print("Descargando HTML...")
-    html_content = download_html(url)
+    download_result = download_html(url)
+    html_content = download_result['content']
+    final_url = download_result['final_url']
+
+    # If URL was redirected, update our variables to use the final URL
+    if final_url != url:
+        print(f"Siguiendo redirección: {url} → {final_url}")
+        url = final_url
+        domain = get_domain(final_url)
+        url_hash = get_url_hash(final_url)
 
     # Limpiar HTML
     print("Limpiando HTML...")
@@ -186,9 +278,9 @@ def main():
     try:
         article_data = extractor.extract(cleaned_html, url)
 
-        # Agregar metadata
+        # Agregar metadata (using final URL after redirects)
         article_data["_metadata"] = {
-            "url": url,
+            "url": url,  # This is now the final URL
             "domain": domain,
             "hash": url_hash
         }

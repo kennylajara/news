@@ -16,9 +16,23 @@ Todos los comandos que listan resultados utilizan paginación automática cuando
 
 Descarga y extrae un artículo desde una URL.
 
-**Ejemplo:**
+**Opciones:**
+- `--cache-no-read`: Ignorar caché, siempre descargar desde HTTP
+- `--cache-no-save`: No guardar en caché después de descargar
+
+**Ejemplos:**
 ```bash
+# Descarga normal (usa caché)
 uv run news article fetch "https://www.diariolibre.com/actualidad/..."
+
+# Forzar descarga fresca (ignora caché, pero sí guarda)
+uv run news article fetch "URL" --cache-no-read
+
+# Descargar sin cachear (útil para URLs temporales)
+uv run news article fetch "URL" --cache-no-save
+
+# Deshabilitar caché completamente
+uv run news article fetch "URL" --cache-no-read --cache-no-save
 ```
 
 ### `news article list`
@@ -76,6 +90,157 @@ Elimina un artículo de la base de datos.
 ```bash
 uv run news article delete 1
 ```
+
+---
+
+## Caché
+
+El sistema de caché almacena el HTML original de las URLs descargadas en `data/cache.db`. Esto es útil durante desarrollo para evitar re-descargas.
+
+### `news cache stats`
+
+Muestra estadísticas del caché.
+
+**Opciones:**
+- `-d, --domain`: Filtrar por dominio específico
+
+**Ejemplos:**
+```bash
+# Estadísticas globales
+uv run news cache stats
+
+# Estadísticas por dominio
+uv run news cache stats --domain diariolibre.com
+```
+
+**Output:**
+```
+Cache statistics (all domains)
+
+Total entries: 245
+Total size: 12.45 MB
+Oldest entry: 2025-01-10 14:23
+Newest entry: 2025-01-17 09:15
+
+Domains in cache: 3
+  Use 'news cache domains' for details
+```
+
+### `news cache list`
+
+Lista URLs cacheadas.
+
+**Opciones:**
+- `-d, --domain`: Filtrar por dominio
+- `-l, --limit`: Número de URLs a mostrar (default: 20)
+- `--no-pager`: Desactivar paginación
+
+**Ejemplos:**
+```bash
+# Listar últimas 20 URLs
+uv run news cache list
+
+# Filtrar por dominio
+uv run news cache list --domain diariolibre.com
+
+# Ver más URLs
+uv run news cache list --limit 50
+```
+
+**Output:**
+```
+Cached URLs (3 shown):
+
+[1] https://www.diariolibre.com/actualidad/ejemplo-1
+    Hash: 7434b1cfe165bcbc...  |  Status: 200  |  Domain: www.diariolibre.com  |  Size: 196.1 KB  |  Cached: 2025-01-17 10:30
+[2] https://www.diariolibre.com/actualidad/ejemplo-2
+    Hash: 105bf8b9d126084d...  |  Status: 200  |  Domain: www.diariolibre.com  |  Size: 193.1 KB  |  Cached: 2025-01-17 10:25
+[3] https://www.diariolibre.com/actualidad/ejemplo-3
+    Hash: 3c493ea42dd7e790...  |  Status: 404  |  Domain: www.diariolibre.com  |  Size: 191.7 KB  |  Cached: 2025-01-17 10:20
+```
+
+**Notas:**
+- El hash se muestra truncado (primeros 16 caracteres)
+- Status code con colores: verde (2xx), amarillo (3xx), rojo (4xx/5xx)
+- Los URLs con status 4xx/5xx fallarán si intentas usarlos con `article fetch`
+
+### `news cache domains`
+
+Lista todos los dominios en caché con estadísticas.
+
+**Ejemplo:**
+```bash
+uv run news cache domains
+```
+
+**Output:**
+```
+Cached domains (3 total):
+
+  diariolibre.com
+    Entries: 198  |  Size: 9.87 MB
+
+  listindiario.com
+    Entries: 45  |  Size: 2.34 MB
+
+  hoy.com.do
+    Entries: 2  |  Size: 240.00 KB
+```
+
+### `news cache show <URL>`
+
+Muestra detalles de un URL cacheado, incluyendo preview del contenido HTML.
+
+**Argumentos:**
+- `URL`: URL completa o hash del URL (completo o parcial, mínimo 8 caracteres)
+
+**Ejemplos:**
+```bash
+# Por URL completa
+uv run news cache show "https://example.com/article"
+
+# Por hash completo
+uv run news cache show 7434b1cfe165bcbc6ae8f6364d840dd5341fd0d4578c3c39db98e4f3726df560
+
+# Por hash parcial (copia del output de 'cache list')
+uv run news cache show 7434b1cfe165bcbc
+```
+
+**Output:**
+```
+Cached URL Details
+
+URL: https://www.diariolibre.com/actualidad/ejemplo
+Domain: www.diariolibre.com
+Hash: 7434b1cfe165bcbc6ae8f6364d840dd5341fd0d4578c3c39db98e4f3726df560
+Status Code: 200
+Content Size: 191.74 KB
+Cached At: 2025-01-17 10:20:30
+Last Accessed: 2025-01-17 14:15:45
+
+Content preview (first 500 chars):
+------------------------------------------------------------
+<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">...
+------------------------------------------------------------
+```
+
+### `news cache clear`
+
+Limpia entradas del caché.
+
+**Opciones:**
+- `-d, --domain`: Solo limpiar entradas de este dominio
+
+**Ejemplos:**
+```bash
+# Limpiar TODO el caché (requiere confirmación)
+uv run news cache clear
+
+# Limpiar solo un dominio
+uv run news cache clear --domain diariolibre.com
+```
+
+**Nota:** Este comando requiere confirmación interactiva (`Are you sure?`).
 
 ---
 
