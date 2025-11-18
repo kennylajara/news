@@ -173,6 +173,12 @@ def extract_article_content(detail_body, exclude_classes=None):
                     if processed:
                         content_parts.append(processed)
 
+            elif element.name == 'h1':
+                text = process_inline_formatting(element)
+                text = ensure_period(text)
+                if text:
+                    content_parts.append(f"\n# {text}\n")
+
             elif element.name == 'h2':
                 # Procesar h2 con formato inline para preservar espacios
                 text = process_inline_formatting(element)
@@ -181,10 +187,34 @@ def extract_article_content(detail_body, exclude_classes=None):
                     content_parts.append(f"\n## {text}\n")
 
             elif element.name == 'h3':
-                text = element.get_text(strip=True)
+                text = process_inline_formatting(element)
                 text = ensure_period(text)
                 if text:
                     content_parts.append(f"\n### {text}\n")
+
+            elif element.name == 'h4':
+                text = process_inline_formatting(element)
+                text = ensure_period(text)
+                if text:
+                    content_parts.append(f"\n#### {text}\n")
+
+            elif element.name == 'h5':
+                text = process_inline_formatting(element)
+                text = ensure_period(text)
+                if text:
+                    content_parts.append(f"\n##### {text}\n")
+
+            elif element.name == 'h6':
+                text = process_inline_formatting(element)
+                text = ensure_period(text)
+                if text:
+                    content_parts.append(f"\n###### {text}\n")
+
+            elif element.name == 'blockquote':
+                text = process_inline_formatting(element)
+                text = ensure_period(text)
+                if text:
+                    content_parts.append(f"\n> {text}\n")
 
             elif element.name == 'ul' and 'list-text' in element.get('class', []):
                 # Lista con viñetas
