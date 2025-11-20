@@ -388,22 +388,25 @@ class NamedEntity(Base):
         """
         Set entity as AMBIGUOUS pointing to multiple canonical entities.
 
+        This method SUMS the provided canonical entities with any existing ones,
+        ensuring no duplicates.
+
         Args:
-            canonical_entities: List of NamedEntity instances (minimum 2, all must be CANONICAL)
+            canonical_entities: List of NamedEntity instances (all must be CANONICAL)
             session: SQLAlchemy session
 
         Raises:
-            ValueError: If entity is not persisted or canonical entities are invalid
+            ValueError: If entity is not persisted, canonical entities are invalid,
+                       or final count would be less than 2
         """
         if self.id is None:
             raise ValueError(
                 f"Entity '{self.name}' must be persisted (committed/flushed) before changing classification"
             )
 
-        if len(canonical_entities) < 2:
+        if len(canonical_entities) < 1:
             raise ValueError(
-                f"AMBIGUOUS entity must point to at least 2 canonical entities "
-                f"(got {len(canonical_entities)})"
+                f"Must provide at least 1 canonical entity (got {len(canonical_entities)})"
             )
 
         # Validate all are CANONICAL and persisted
@@ -421,8 +424,22 @@ class NamedEntity(Base):
         # Mark articles for recalculation
         self._mark_articles_for_rerank(session)
 
+        # Sum new canonical_entities with existing ones (avoiding duplicates)
+        existing_canonical_ids = {e.id for e in self.canonical_refs}
+        new_canonicals = [e for e in canonical_entities if e.id not in existing_canonical_ids]
+
+        # Combine existing + new (unique by ID)
+        combined_canonicals = list(self.canonical_refs) + new_canonicals
+
+        # Validate final count is at least 2
+        if len(combined_canonicals) < 2:
+            raise ValueError(
+                f"AMBIGUOUS entity must point to at least 2 canonical entities "
+                f"(would have {len(combined_canonicals)} after merge)"
+            )
+
         self.classified_as = EntityClassification.AMBIGUOUS
-        self.canonical_refs = canonical_entities
+        self.canonical_refs = combined_canonicals
 
     def validate_classification(self, session):
         """
