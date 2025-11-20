@@ -9,6 +9,7 @@ from sqlalchemy import insert, update, delete
 from db import ProcessingBatch, BatchItem, Article, NamedEntity, EntityType, ArticleCluster, ArticleSentence, ClusterCategory, FlashNews, EntityClassification, EntityOrigin
 from db.models import article_entities
 from processors.clustering import extract_sentences, make_embeddings, cluster_article
+from processors.tokenization import populate_entity_tokens
 from collections import defaultdict
 
 
@@ -262,6 +263,10 @@ def calculate_local_relevance_with_classification(
             )
             session.add(entity)
             session.flush()
+
+            # Populate entity_tokens reverse index
+            populate_entity_tokens(entity.id, entity.name, session)
+
             is_new = True  # Mark as new
         else:
             # Update existing entity
