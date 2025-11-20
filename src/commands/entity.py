@@ -1512,3 +1512,98 @@ def auto_classify(entity_type, dry_run, limit):
 
     finally:
         session.close()
+
+
+@entity.command()
+@click.option('--type', 'entity_type', type=click.Choice(['person', 'org', 'gpe', 'all'], case_sensitive=False), default='all', help='Filter by entity type')
+@click.option('--limit', type=int, default=None, help='Maximum number of entities to process')
+@click.option('--min-confidence', type=float, default=0.70, help='Minimum confidence threshold (0.0-1.0)')
+@click.option('--dry-run', is_flag=True, default=False, help='Preview changes without applying them')
+def ai_classify(entity_type, limit, min_confidence, dry_run):
+    """
+    Classify entities using AI/LLM based on semantic context.
+
+    This command uses OpenAI's language models to analyze entity mentions
+    and their context to suggest intelligent classifications.
+
+    Examples:
+        # Classify all unreviewed entities (dry-run first)
+        news entity ai-classify --dry-run
+
+        # Apply classifications with high confidence
+        news entity ai-classify --min-confidence 0.90
+
+        # Classify only person entities
+        news entity ai-classify --type person --limit 50
+
+        # Apply all suggestions (lower threshold)
+        news entity ai-classify --min-confidence 0.70
+    """
+    from processors.entity_ai_classification import batch_classify_entities
+
+    db = Database()
+    session = db.get_session()
+
+    try:
+        # Convert 'all' to None for the processor
+        type_filter = None if entity_type == 'all' else entity_type
+
+        # Display settings
+        click.echo(click.style(f"\n🤖 AI-Assisted Entity Classification", fg="cyan", bold=True))
+        click.echo(f"{'=' * 60}")
+        click.echo(f"Entity type: {entity_type}")
+        click.echo(f"Limit: {limit if limit else 'No limit'}")
+        click.echo(f"Min confidence: {min_confidence:.2f}")
+        click.echo(f"Mode: {'DRY RUN' if dry_run else 'APPLY CHANGES'}")
+        click.echo(f"{'=' * 60}\n")
+
+        if dry_run:
+            click.echo(click.style("⚠ DRY RUN MODE - No changes will be made\n", fg="yellow"))
+
+        # Run batch classification
+        click.echo("Processing entities...\n")
+
+        stats = batch_classify_entities(
+            session=session,
+            entity_type=type_filter,
+            limit=limit,
+            min_confidence=min_confidence,
+            dry_run=dry_run
+        )
+
+        # Display results
+        click.echo(f"\n{'=' * 60}")
+        click.echo(click.style("📊 Classification Results", fg="cyan", bold=True))
+        click.echo(f"{'=' * 60}\n")
+
+        click.echo(f"Processed: {stats['processed']}")
+        click.echo(click.style(f"✓ Successfully classified: {stats['success']}", fg="green"))
+        click.echo(f"  ├─ Applied to database: {stats['applied']}")
+        click.echo(f"  └─ Auto-approved: {stats['auto_approved']}")
+        click.echo(click.style(f"⚠ Skipped (low confidence): {stats['skipped_low_confidence']}", fg="yellow"))
+        click.echo(f"ℹ Skipped (no candidates): {stats['skipped_no_candidates']}")
+        click.echo(click.style(f"✗ Errors: {stats['errors']}", fg="red" if stats['errors'] > 0 else "white"))
+
+        # Success rate
+        if stats['processed'] > 0:
+            success_rate = (stats['success'] / stats['processed']) * 100
+            click.echo(f"\nSuccess rate: {success_rate:.1f}%")
+
+        # Recommendations
+        if dry_run:
+            click.echo(click.style(f"\n💡 This was a dry run. To apply changes, run without --dry-run", fg="cyan"))
+        else:
+            if stats['skipped_low_confidence'] > 0:
+                click.echo(click.style(f"\n💡 {stats['skipped_low_confidence']} entities had low confidence and were saved as suggestions.", fg="cyan"))
+                click.echo(f"   Review them with: news entity suggestions list --not-applied")
+
+        click.echo()
+
+    except Exception as e:
+        session.rollback()
+        click.echo(click.style(f"\n✗ Error during AI classification: {str(e)}", fg="red"))
+        import traceback
+        traceback.print_exc()
+
+    finally:
+        session.close()

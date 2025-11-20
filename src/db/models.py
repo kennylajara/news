@@ -1073,3 +1073,41 @@ class FlashNews(Base):
 
     def __repr__(self):
         return f"<FlashNews(id={self.id}, cluster_id={self.cluster_id}, published={bool(self.published)}, summary='{self.summary[:50]}...')>"
+
+
+class EntityClassificationSuggestion(Base):
+    """AI-assisted entity classification suggestions for audit and review."""
+    __tablename__ = 'entity_classification_suggestions'
+
+    id = Column(Integer, primary_key=True)
+    entity_id = Column(Integer, ForeignKey('named_entities.id', ondelete='CASCADE'), nullable=False)
+
+    # Suggestion details
+    suggested_classification = Column(String(20), nullable=False)  # canonical, alias, ambiguous, not_an_entity
+    suggested_canonical_ids = Column(JSON, nullable=True)  # Array of IDs for alias/ambiguous
+    confidence = Column(Float, nullable=False)  # 0.0 to 1.0
+    reasoning = Column(Text, nullable=False)  # LLM explanation
+
+    # Alternative suggestion (if LLM was uncertain)
+    alternative_classification = Column(String(20), nullable=True)
+    alternative_confidence = Column(Float, nullable=True)
+
+    # Application status
+    applied = Column(Integer, nullable=False, default=0)  # 0=suggestion only, 1=applied to entity
+    approved_by_user = Column(Integer, nullable=True)  # NULL=pending, 0=rejected, 1=approved
+
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationship
+    entity = relationship('NamedEntity', backref='classification_suggestions')
+
+    __table_args__ = (
+        Index('idx_entity_classification_entity', 'entity_id'),
+        Index('idx_entity_classification_applied', 'applied'),
+        Index('idx_entity_classification_confidence', 'confidence'),
+        Index('idx_entity_classification_approved', 'approved_by_user'),
+    )
+
+    def __repr__(self):
+        return f"<EntityClassificationSuggestion(id={self.id}, entity_id={self.entity_id}, classification={self.suggested_classification}, confidence={self.confidence:.2f}, applied={bool(self.applied)})>"

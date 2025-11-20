@@ -1,0 +1,80 @@
+## Entidad a Clasificar
+
+**Nombre:** {{ entity_name }}
+**Tipo detectado:** {{ entity_type }}
+**Menciones totales:** {{ total_mentions }} (en {{ article_count }} artículo{{ 's' if article_count != 1 else '' }})
+**Estado actual:** {{ current_classification }}
+
+{% if context_sentences and context_sentences|length > 0 %}
+## Contexto de Uso
+
+Las siguientes oraciones muestran cómo se usa esta entidad en los artículos:
+
+{% for sentence in context_sentences[:5] %}
+{{ loop.index }}. {{ sentence }}
+{% endfor %}
+{% if context_sentences|length > 5 %}
+... ({{ context_sentences|length - 5 }} oraciones adicionales omitidas)
+{% endif %}
+{% else %}
+## Contexto de Uso
+
+No hay suficientes oraciones de contexto disponibles. Basa tu análisis principalmente en los candidatos y co-ocurrencia.
+{% endif %}
+
+{% if candidates and candidates|length > 0 %}
+## Candidatos Encontrados
+
+Se encontraron las siguientes entidades canónicas que podrían relacionarse con "{{ entity_name }}":
+
+{% for candidate in candidates %}
+### {{ loop.index }}. {{ candidate.name }}
+- **ID:** {{ candidate.id }}
+- **Tipo:** {{ candidate.type }}
+- **Artículos compartidos:** {{ candidate.shared_articles }} de {{ article_count }} ({{ "%.0f"|format((candidate.shared_articles / article_count * 100) if article_count > 0 else 0) }}%)
+{% if candidate.context_overlap %}
+- **Términos compartidos:** {{ candidate.context_overlap }}
+{% endif %}
+{% if candidate.sample_sentences and candidate.sample_sentences|length > 0 %}
+- **Ejemplos de co-ocurrencia:**
+{% for sentence in candidate.sample_sentences[:2] %}
+  {{ loop.index }}. {{ sentence }}
+{% endfor %}
+{% endif %}
+
+{% endfor %}
+{% else %}
+## Candidatos Encontrados
+
+No se encontraron candidatos canónicos similares mediante el índice invertido.
+
+**Posibles razones:**
+- Es una entidad nueva (CANONICAL)
+- Es un nombre muy único sin variantes conocidas
+- Es un error de NER (NOT_AN_ENTITY)
+{% endif %}
+
+---
+
+## Tu Tarea
+
+Analiza la información anterior y determina:
+
+1. **Clasificación:** ¿Es CANONICAL, ALIAS, AMBIGUOUS o NOT_AN_ENTITY?
+
+2. **IDs de Canonicals:**
+   - Si es ALIAS: proporciona el ID del candidato al que se refiere
+   - Si es AMBIGUOUS: proporciona los IDs de todos los candidatos posibles (mínimo 2)
+   - Si es CANONICAL o NOT_AN_ENTITY: deja como null
+
+3. **Confianza:** Del 0.0 al 1.0, ¿qué tan seguro estás?
+
+4. **Razonamiento:** Explica brevemente (1-3 oraciones) tu decisión citando evidencia del contexto o co-ocurrencia.
+
+{% if candidates and candidates|length > 1 %}
+**Nota especial:** Hay múltiples candidatos. Considera si "{{ entity_name }}" se refiere a uno solo (ALIAS) o podría referirse a varios según el contexto (AMBIGUOUS).
+{% endif %}
+
+{% if total_mentions < 5 %}
+**Advertencia:** Esta entidad tiene pocas menciones ({{ total_mentions }}). Sé conservador con el nivel de confianza.
+{% endif %}

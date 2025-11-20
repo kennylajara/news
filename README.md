@@ -249,7 +249,7 @@ uv run news entity search "Luis"
 
 ### MVP
 
-- AI Assisted entity classification
+- AI Assisted entity classification (los ejemplos enviados a la IA deben ser lo más distinto posible entre sí)
 - Forzar a Spacy a detectar títulos si están colocados antes del nombre de una persona: Ministro, presidente, diputado
 - Forzar NER a detectar referencias aprobadas
 - Hacer que la IA pueda revisar hacer review de las entidades (con flag --auto-accept)

@@ -4,17 +4,60 @@
 
 El sistema ya cuenta con:
 1. **Clasificación algorítmica** (`auto-classify`) - Detecta patrones heurísticos simples (iniciales, nombres parciales)
+   - Gratis y muy rápido
+   - Aprueba casos obvios automáticamente
 2. **Clasificación manual** - El usuario revisa y clasifica entidades manualmente
+   - Costoso en tiempo
+   - Necesario para casos complejos
 
 ## Problema a Resolver
 
-La clasificación algorítmica tiene limitaciones:
+La clasificación algorítmica procesa muchas entidades pero **no las aprueba todas**:
+- Marca como `last_review_type='algorithmic'`
+- Pero deja `is_approved=0` en casos con incertidumbre
+
+**Limitaciones del algoritmo:**
 - **No entiende contexto semántico**: "Luis" podría ser "Luis Abinader" o "Luis Rodolfo Abinader"
 - **No detecta sinónimos**: "Banco Central" vs "BCRD" (sin iniciales obvias)
 - **Casos ambiguos complejos**: "Fernández" podría referirse a 5+ personas diferentes
 - **Nombres con variaciones**: "República Dominicana" vs "Rep. Dominicana" vs "RD"
 
-**Resultado:** Miles de entidades quedan sin clasificar o mal clasificadas, requiriendo revisión manual costosa.
+**Resultado:** Miles de entidades clasificadas algorítmicamente pero **sin aprobar** (`is_approved=0`), requiriendo revisión manual costosa.
+
+## Estrategia: Clasificación Híbrida
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 1. NER detecta entidades → CANONICAL (last_review_type=none)│
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 2. Clasificación ALGORÍTMICA (heurísticas)                  │
+│    - Gratis y rápido                                        │
+│    - Aprueba casos obvios (is_approved=1)                   │
+│    - Deja sin aprobar casos dudosos (is_approved=0)         │
+│    → last_review_type='algorithmic'                         │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 3. Clasificación con IA (solo is_approved=0)                │
+│    - Analiza contexto semántico                             │
+│    - Agrega precisión donde el algoritmo tiene dudas        │
+│    - Costo: ~$0.0004 por entidad                            │
+│    → last_review_type='ai-assisted'                         │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 4. Revisión MANUAL (solo casos muy complejos)               │
+│    - Solo entidades que IA no aprobó                        │
+│    → last_review_type='manual'                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Ventaja:** El algoritmo procesa miles de entidades gratis, y la IA solo revisa las que tienen incertidumbre (ahorro de costos).
 
 ## Solución Propuesta: Clasificación Asistida por IA
 
@@ -66,14 +109,48 @@ Decisión: AMBIGUOUS con 3 canonicals
 
 ### 4. **Confianza Graduada**
 
-El LLM puede expresar su nivel de certeza:
+El LLM expresa su nivel de certeza y el sistema actúa en consecuencia:
 
-| Confianza | Acción Sugerida | Ejemplo |
-|-----------|-----------------|---------|
-| 90-100% | Auto-aprobar | "JCE" → "Junta Central Electoral" (contexto claro) |
-| 70-89% | Sugerir para revisión rápida | "Luis" → "Luis Abinader" (probable pero verificar) |
-| 50-69% | Revisión manual requerida | "Martínez" → ambiguo entre 3 personas |
-| <50% | Dejar sin clasificar | Insuficiente información |
+| Confianza | ¿Aplicar clasificación? | ¿Aprobar? | Ejemplo |
+|-----------|-------------------------|-----------|---------|
+| **90-100%** | ✅ Sí | ✅ Sí (`is_approved=1`) | "JCE" → "Junta Central Electoral" (contexto muy claro) |
+| **70-89%** | ✅ Sí | ❌ No (`is_approved=0`) | "Luis" → "Luis Abinader" (probable pero verificar después) |
+| **50-69%** | ❌ No | ❌ No | "Martínez" → ambiguo entre 3 personas (solo guardar sugerencia) |
+| **<50%** | ❌ No | ❌ No | Insuficiente información (solo guardar sugerencia) |
+
+**Diferencia entre "Aplicar" y "Guardar Sugerencia":**
+
+**APLICAR (confianza ≥70%):**
+- Cambia la clasificación de la entidad **inmediatamente** en la base de datos
+- La entidad queda clasificada (ALIAS, AMBIGUOUS, etc.) y puede ser usada por el sistema
+- Se marca como `last_review_type='ai-assisted'`
+- Ejemplo: "Luis" pasa de CANONICAL → ALIAS de "Luis Abinader" **ahora mismo**
+
+**GUARDAR SUGERENCIA (confianza <70%):**
+- **NO cambia** la clasificación de la entidad
+- Solo guarda la recomendación del LLM en `entity_classification_suggestions`
+- La entidad mantiene su clasificación actual
+- Un humano debe revisar y decidir manualmente si aplicarla
+- Campo `applied=0` en la tabla de sugerencias
+
+**Diferencia con "Aprobar":**
+
+- **Aprobar** (`is_approved=1`) = Marcar como confiable para producción (no necesita revisión)
+- Se puede aplicar SIN aprobar (confianza 70-89%): está en la DB pero necesita QA
+
+**Ejemplo comparativo:**
+
+| Confianza | Acción | Estado en DB | `applied` | `is_approved` |
+|-----------|--------|--------------|-----------|---------------|
+| **95%** | Aplicar + Aprobar | ALIAS en DB ✅ | 1 | 1 |
+| **75%** | Aplicar sin aprobar | ALIAS en DB ⚠️ | 1 | 0 |
+| **55%** | Solo guardar sugerencia | CANONICAL (sin cambios) 💾 | 0 | 0 |
+
+**¿Por qué esta estrategia?**
+
+- **Confianza ≥90%:** Casos obvios → aplicar y aprobar completamente
+- **Confianza 70-89%:** Casos probables → aplicar para avanzar, pero flaggear para revisión
+- **Confianza <70%:** Casos dudosos → no arriesgarse, solo guardar sugerencia
 
 ---
 
@@ -82,9 +159,11 @@ El LLM puede expresar su nivel de certeza:
 ### Flujo General
 
 ```
-1. Filtrar entidades no clasificadas
-   └─> last_review_type = 'none'
-   └─> Ordenar por: article_count DESC, name_length ASC
+1. Filtrar entidades que necesitan precisión de IA
+   └─> last_review_type = 'algorithmic' (ya procesadas por heurísticas)
+   └─> is_approved = 0 (el algoritmo no las aprobó)
+   └─> Ordenar por: article_count DESC (más contexto primero),
+                     name_length ASC (aliases primero)
 
 2. Por cada entidad (batch de 100):
    ├─> Buscar candidatos (reverse index)
@@ -96,10 +175,12 @@ El LLM puede expresar su nivel de certeza:
    └─> Marcar como last_review_type='ai-assisted'
 
 3. Generar reporte de clasificaciones
-   ├─> Auto-aprobadas (confianza alta)
-   ├─> Sugerencias para revisión
-   └─> Sin clasificar (confianza baja)
+   ├─> Auto-aprobadas (confianza ≥90%)
+   ├─> Aplicadas sin aprobar (confianza 70-89%)
+   └─> Solo sugeridas (confianza <70%)
 ```
+
+**Nota importante:** La IA NO procesa entidades con `last_review_type='none'`. Primero debe ejecutarse la clasificación algorítmica para ahorrar costos.
 
 ### Componentes Clave
 
@@ -327,16 +408,38 @@ Para auditoría y revisión manual posterior:
 
 ## Workflow de Uso
 
+### Flujo Completo Recomendado
+
+```bash
+# PASO 1: Ejecutar clasificación algorítmica primero (gratis y rápido)
+uv run news entity auto-classify
+
+# Resultado:
+# - Casos obvios: aprobados automáticamente (is_approved=1)
+# - Casos dudosos: clasificados pero sin aprobar (is_approved=0)
+
+# PASO 2: Ejecutar clasificación con IA para casos dudosos
+uv run news entity ai-classify --min-confidence 0.70
+
+# Resultado:
+# - Confianza ≥90%: aprobados automáticamente
+# - Confianza 70-89%: aplicados pero para revisión
+# - Confianza <70%: solo guardados como sugerencias
+
+# PASO 3: Revisar manualmente casos que IA no aprobó
+uv run news entity suggestions list --pending-approval
+```
+
 ### 1. Ejecutar Clasificación IA
 
 ```bash
-# Clasificar entidades sin revisar (dry-run)
+# Dry-run para previsualizar (recomendado primero)
 uv run news entity ai-classify --dry-run
 
-# Aplicar clasificaciones con confianza alta (≥90%)
+# Aplicar clasificaciones con confianza alta (≥90% = auto-aprobar)
 uv run news entity ai-classify --min-confidence 0.90
 
-# Aplicar todas las sugerencias (≥70%)
+# Aplicar todas las sugerencias (≥70% = aplicar pero revisar después)
 uv run news entity ai-classify --min-confidence 0.70
 
 # Procesar solo un tipo de entidad
@@ -526,10 +629,22 @@ Según resultados de producción, ajustar:
 | **Escalabilidad** | Miles/minuto | Cientos/minuto |
 | **Mejor para** | Casos obvios (JCE → Junta) | Casos ambiguos (Luis → ¿quién?) |
 
-**Estrategia recomendada:**
-1. Ejecutar clasificación algorítmica primero (rápida y gratuita)
-2. Usar IA para entidades que quedaron sin clasificar o con baja confianza
-3. Revisión manual para casos extremadamente ambiguos
+**Estrategia recomendada (flujo híbrido):**
+1. **Clasificación algorítmica primero** (gratis, rápida, procesa miles)
+   - Aprueba casos obvios (`is_approved=1`)
+   - Clasifica pero no aprueba casos dudosos (`is_approved=0`)
+2. **IA para casos no aprobados** (costo bajo, agrega precisión)
+   - Solo procesa `last_review_type='algorithmic'` + `is_approved=0`
+   - Ahorro: solo paga por entidades que realmente necesitan IA
+3. **Revisión manual** solo para casos extremadamente ambiguos
+   - Solo entidades que IA tampoco aprobó
+
+**Ejemplo de ahorro:**
+- 10,000 entidades detectadas por NER
+- Algoritmo procesa 10,000 (gratis) → aprueba 7,000, deja 3,000 sin aprobar
+- IA procesa solo 3,000 ($1.20) → aprueba 2,500, deja 500 para manual
+- Manual: solo 500 entidades (5% del total)
+- **Ahorro vs procesar todo con IA:** $3 (70% menos costo)
 
 ---
 
