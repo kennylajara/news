@@ -1,4 +1,4 @@
-# Sistema de Clasificación de Entidades Asistido por IA
+# Sistema de Clasificación de Entidades Asistido por IA (LSH + Pairwise)
 
 ## Contexto
 
@@ -17,7 +17,7 @@ La clasificación algorítmica procesa muchas entidades pero **no las aprueba to
 - Pero deja `is_approved=0` en casos con incertidumbre
 
 **Limitaciones del algoritmo:**
-- **No entiende contexto semántico**: "Luis" podría ser "Luis Abinader" o "Luis Rodolfo Abinader"
+- **No entiende contexto semántico**: "Luis" podría ser "Luis Abinader" o "Luis Gil"
 - **No detecta sinónimos**: "Banco Central" vs "BCRD" (sin iniciales obvias)
 - **Casos ambiguos complejos**: "Fernández" podría referirse a 5+ personas diferentes
 - **Nombres con variaciones**: "República Dominicana" vs "Rep. Dominicana" vs "RD"
@@ -43,9 +43,10 @@ La clasificación algorítmica procesa muchas entidades pero **no las aprueba to
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ 3. Clasificación con IA (solo is_approved=0)                │
-│    - Analiza contexto semántico                             │
-│    - Agrega precisión donde el algoritmo tiene dudas        │
-│    - Costo: ~$0.0004 por entidad                            │
+│    - LSH encuentra candidatos similares (O(n·k) vs O(n²))  │
+│    - Comparación 1v1 (ambas entidades pueden cambiar)      │
+│    - Analiza contexto semántico completo                    │
+│    - Costo: ~$0.0004 por comparación                        │
 │    → last_review_type='ai-assisted'                         │
 └────────────────────┬────────────────────────────────────────┘
                      │
@@ -59,628 +60,566 @@ La clasificación algorítmica procesa muchas entidades pero **no las aprueba to
 
 **Ventaja:** El algoritmo procesa miles de entidades gratis, y la IA solo revisa las que tienen incertidumbre (ahorro de costos).
 
-## Solución Propuesta: Clasificación Asistida por IA
-
-Un proceso batch que usa **modelos de lenguaje (LLM)** para analizar contexto semántico y sugerir clasificaciones inteligentes.
-
 ---
 
-## Ventajas del Enfoque con IA
+## Innovación: LSH + Comparación Pareada (1v1)
 
-### 1. **Comprensión de Contexto**
+### Enfoque Tradicional (Descartado)
+- **1 entidad vs N candidatos**: Envía lista de 5-10 candidatos al LLM
+- **Problemas:**
+  - Prompt largo con muchos candidatos
+  - Confusión con demasiadas opciones
+  - No escala bien (>10 candidatos)
+  - Sesgo de presentación
 
-El LLM puede leer oraciones completas donde aparecen las entidades:
+### Enfoque Actual: LSH + Pairwise
+**Locality Sensitive Hashing (LSH)** reduce búsqueda de candidatos de O(n²) a O(n·k):
 
-**Ejemplo:**
-```
-Entidad evaluada: "Luis"
-Candidatos: "Luis Abinader", "Luis Rodolfo Abinader"
+```python
+# 1. Indexar todas las entidades CANONICAL con MinHash
+matcher = EntityLSHMatcher(threshold=0.4)
+matcher.index_entities(all_canonical_entities)
 
-Contexto del artículo:
-"El presidente Luis anunció hoy..." → "Luis Abinader"
-"Luis Rodolfo aseguró que..." → "Luis Rodolfo Abinader"
-```
+# 2. Para cada entidad a evaluar, LSH encuentra top-K similares
+candidates = matcher.find_candidates(entity, max_candidates=10)
+# En lugar de comparar con TODAS (10,000+), solo compara con ~5-10
 
-### 2. **Detección de Sinónimos y Variaciones**
-
-El LLM conoce formas comunes de referirse a entidades:
-
-**Ejemplo:**
-```
-"BCRD" → "Banco Central de la República Dominicana"
-"Banco Central" → "Banco Central de la República Dominicana"
-"Central de RD" → "Banco Central de la República Dominicana"
-```
-
-### 3. **Manejo de Ambigüedad Compleja**
-
-Cuando hay múltiples candidatos igualmente válidos:
-
-**Ejemplo:**
-```
-Entidad: "Martínez"
-Contextos diferentes:
-- "El ministro Martínez..." → Pedro Martínez (Ministro de Obras Públicas)
-- "El diputado Martínez..." → José Martínez (Diputado PRM)
-- "Martínez, del equipo..." → Juan Martínez (Jugador de béisbol)
-
-Decisión: AMBIGUOUS con 3 canonicals
+# 3. Comparación 1v1 con cada candidato
+for candidate, jaccard_sim in candidates:
+    result = compare_entities_with_ai(entity, candidate, session, jaccard_sim)
+    # LLM ve contexto COMPLETO de ambas entidades
+    # Puede recomendar acciones para AMBAS (sin sesgo de orden)
 ```
 
-### 4. **Confianza Graduada**
+**Ventajas del LSH + 1v1:**
+1. **Escalabilidad**: De 50,000,000 comparaciones a 50,000 (reducción de 1000x)
+2. **Sin sesgo de orden**: Ambas entidades pueden cambiar clasificación
+3. **Contexto completo**: LLM ve toda la información de ambas entidades
+4. **Decisiones simétricas**: "Luis" puede ser alias de "Luis Abinader" Y viceversa
 
-El LLM expresa su nivel de certeza y el sistema actúa en consecuencia:
+### MinHash y Shingles
 
-| Confianza | ¿Aplicar clasificación? | ¿Aprobar? | Ejemplo |
-|-----------|-------------------------|-----------|---------|
-| **90-100%** | ✅ Sí | ✅ Sí (`is_approved=1`) | "JCE" → "Junta Central Electoral" (contexto muy claro) |
-| **70-89%** | ✅ Sí | ❌ No (`is_approved=0`) | "Luis" → "Luis Abinader" (probable pero verificar después) |
-| **50-69%** | ❌ No | ❌ No | "Martínez" → ambiguo entre 3 personas (solo guardar sugerencia) |
-| **<50%** | ❌ No | ❌ No | Insuficiente información (solo guardar sugerencia) |
+**Shingles** = Fragmentos de texto para comparación:
+- **Word shingles**: Palabras completas (`["luis", "abinader", "corona"]`)
+- **Character n-grams**: Fragmentos de 3 caracteres (`["lui", "uis", "is ", "s a", " ab", ...]`)
 
-**Diferencia entre "Aplicar" y "Guardar Sugerencia":**
+**MinHash** = Firma compacta de shingles (128 permutaciones):
+```python
+shingles = {"luis", "abinader", "lui", "uis", "is ", ...}
+minhash = MinHash(num_perm=128)
+for s in shingles:
+    minhash.update(s.encode('utf8'))
+```
 
-**APLICAR (confianza ≥70%):**
-- Cambia la clasificación de la entidad **inmediatamente** en la base de datos
-- La entidad queda clasificada (ALIAS, AMBIGUOUS, etc.) y puede ser usada por el sistema
-- Se marca como `last_review_type='ai-assisted'`
-- Ejemplo: "Luis" pasa de CANONICAL → ALIAS de "Luis Abinader" **ahora mismo**
-
-**GUARDAR SUGERENCIA (confianza <70%):**
-- **NO cambia** la clasificación de la entidad
-- Solo guarda la recomendación del LLM en `entity_classification_suggestions`
-- La entidad mantiene su clasificación actual
-- Un humano debe revisar y decidir manualmente si aplicarla
-- Campo `applied=0` en la tabla de sugerencias
-
-**Diferencia con "Aprobar":**
-
-- **Aprobar** (`is_approved=1`) = Marcar como confiable para producción (no necesita revisión)
-- Se puede aplicar SIN aprobar (confianza 70-89%): está en la DB pero necesita QA
-
-**Ejemplo comparativo:**
-
-| Confianza | Acción | Estado en DB | `applied` | `is_approved` |
-|-----------|--------|--------------|-----------|---------------|
-| **95%** | Aplicar + Aprobar | ALIAS en DB ✅ | 1 | 1 |
-| **75%** | Aplicar sin aprobar | ALIAS en DB ⚠️ | 1 | 0 |
-| **55%** | Solo guardar sugerencia | CANONICAL (sin cambios) 💾 | 0 | 0 |
-
-**¿Por qué esta estrategia?**
-
-- **Confianza ≥90%:** Casos obvios → aplicar y aprobar completamente
-- **Confianza 70-89%:** Casos probables → aplicar para avanzar, pero flaggear para revisión
-- **Confianza <70%:** Casos dudosos → no arriesgarse, solo guardar sugerencia
+**Similitud de Jaccard** entre dos entidades:
+```python
+jaccard = len(shingles_a & shingles_b) / len(shingles_a | shingles_b)
+# Ejemplo: "Luis Abinader" vs "Luis" → ~0.6 (60% similitud)
+```
 
 ---
 
 ## Arquitectura del Sistema
 
-### Flujo General
+### Módulos
 
-```
-1. Filtrar entidades que necesitan precisión de IA
-   └─> last_review_type = 'algorithmic' (ya procesadas por heurísticas)
-   └─> is_approved = 0 (el algoritmo no las aprobó)
-   └─> Ordenar por: article_count DESC (más contexto primero),
-                     name_length ASC (aliases primero)
+#### 1. `processors/entity_lsh_matcher.py`
+**Búsqueda eficiente de candidatos con LSH**
 
-2. Por cada entidad (batch de 100):
-   ├─> Buscar candidatos (reverse index)
-   ├─> Obtener contexto de artículos
-   ├─> Preparar datos para LLM
-   ├─> Llamar API de OpenAI
-   ├─> Procesar respuesta estructurada
-   ├─> Aplicar clasificación según confianza
-   └─> Marcar como last_review_type='ai-assisted'
-
-3. Generar reporte de clasificaciones
-   ├─> Auto-aprobadas (confianza ≥90%)
-   ├─> Aplicadas sin aprobar (confianza 70-89%)
-   └─> Solo sugeridas (confianza <70%)
-```
-
-**Nota importante:** La IA NO procesa entidades con `last_review_type='none'`. Primero debe ejecutarse la clasificación algorítmica para ahorrar costos.
-
-### Componentes Clave
-
-#### 1. Pre-filtrado con Reverse Index
-
-Antes de llamar al LLM, usamos el **reverse index** (`entity_tokens`) para:
-- Encontrar candidatos potenciales (solo entidades más largas con tokens coincidentes)
-- Reducir de miles de entidades a 5-10 candidatos por evaluada
-- **Ahorrar costos** de API al no enviar todo al LLM
-
-**Beneficio:** En lugar de enviar 1000 entidades al LLM, enviamos solo los 5 candidatos más relevantes.
-
-#### 2. Extracción de Contexto
-
-Para cada entidad evaluada, se extrae:
-
-| Dato | Fuente | Propósito |
-|------|--------|-----------|
-| **Menciones** | `article_entities.mentions` | Frecuencia de aparición |
-| **Oraciones de contexto** | `article_entities.context_sentences` | Cómo se usa la entidad |
-| **Artículos compartidos** | `article_entities` JOIN | ¿Candidato y evaluada aparecen juntos? |
-| **Tipo detectado** | `named_entities.entity_type` | PERSON, ORG, GPE, etc. |
-| **Relevancia** | `article_entities.relevance` | Importancia en el artículo |
-
-**Ejemplo de contexto extraído:**
-```json
-{
-  "entity_name": "Luis",
-  "entity_type": "PERSON",
-  "total_mentions": 45,
-  "context_samples": [
-    "El presidente Luis anunció hoy una nueva medida económica",
-    "Luis afirmó que el gobierno continuará con las reformas"
-  ],
-  "candidates": [
-    {
-      "name": "Luis Abinader",
-      "type": "PERSON",
-      "shared_articles": 42,
-      "context_overlap": "presidente, gobierno, reformas"
-    },
-    {
-      "name": "Luis Rodolfo Abinader",
-      "type": "PERSON",
-      "shared_articles": 3,
-      "context_overlap": "reformas"
-    }
-  ]
-}
-```
-
-#### 3. Prompt Engineering
-
-El sistema usa **templates Jinja2** para construir prompts estructurados:
-
-**Sistema (`entity_classification_system_prompt.md.jinja`):**
-```
-Eres un experto en desambiguación de entidades para un portal de noticias
-dominicano. Tu tarea es analizar menciones de entidades y determinar si
-deben clasificarse como:
-
-- CANONICAL: Entidad principal (ya existe o es nueva)
-- ALIAS: Variante de otra entidad (ej: "JCE" → "Junta Central Electoral")
-- AMBIGUOUS: Puede referirse a múltiples entidades (ej: "Martínez")
-- NOT_AN_ENTITY: No es realmente una entidad (error de NER)
-
-Considera:
-- Contexto semántico de las oraciones
-- Frecuencia de co-ocurrencia con candidatos
-- Convenciones dominicanas (ej: "BCRD" = Banco Central)
-- Coherencia con tipos detectados (PERSON, ORG, etc.)
-```
-
-**Usuario (`entity_classification_user_prompt.md.jinja`):**
-```
-Entidad a clasificar: {{ entity_name }}
-Tipo detectado: {{ entity_type }}
-Menciones totales: {{ total_mentions }}
-
-Contexto de uso:
-{% for sentence in context_samples %}
-- {{ sentence }}
-{% endfor %}
-
-Candidatos encontrados:
-{% for candidate in candidates %}
-{{ loop.index }}. {{ candidate.name }} ({{ candidate.type }})
-   - Artículos compartidos: {{ candidate.shared_articles }}
-   - Contexto: {{ candidate.context_overlap }}
-{% endfor %}
-
-¿Cómo debe clasificarse "{{ entity_name }}"?
-```
-
-#### 4. Respuesta Estructurada (Pydantic)
-
-El LLM devuelve una respuesta JSON validada:
-
-**Schema (`src/llm/prompts/entity_classification.py`):**
 ```python
-from pydantic import BaseModel, Field
-from typing import Literal, Optional, List
+from processors.entity_lsh_matcher import EntityLSHMatcher
 
+# Crear índice LSH
+matcher = EntityLSHMatcher(
+    threshold=0.4,      # Mínimo 40% similitud Jaccard
+    num_perm=128,       # Permutaciones MinHash
+    char_ngram_size=3   # Tamaño de character n-grams
+)
+
+# Indexar entidades CANONICAL
+matcher.index_entities(canonical_entities)
+
+# Buscar candidatos similares
+candidates = matcher.find_candidates(
+    entity,
+    max_candidates=10,
+    exclude_self=True
+)
+# Retorna: [(candidate_entity, jaccard_similarity), ...]
+```
+
+**Funciones helper:**
+- `normalize_text(text)` - Normaliza texto (lowercase, sin acentos, sin puntuación)
+- `text_to_shingles(text)` - Convierte texto a shingles (words + char n-grams)
+- `create_minhash(shingles)` - Crea firma MinHash
+- `build_lsh_index_for_type(session, entity_type)` - Construye índice para un tipo
+
+#### 2. `processors/entity_ai_classification.py`
+**Clasificación con IA usando comparaciones 1v1**
+
+```python
+from processors.entity_ai_classification import (
+    classify_entity_with_ai,
+    batch_classify_entities
+)
+
+# Clasificar una entidad
+status, result, error = classify_entity_with_ai(
+    entity=entity,
+    session=session,
+    lsh_matcher=matcher,  # Opcional: reusar índice
+    min_confidence=0.70,
+    max_candidates=10,
+    dry_run=False
+)
+
+# Clasificar batch
+stats = batch_classify_entities(
+    session=session,
+    entity_type='person',
+    limit=100,
+    min_confidence=0.70,
+    max_candidates=10,
+    dry_run=False
+)
+```
+
+**Funciones principales:**
+- `extract_pairwise_context()` - Extrae contexto de ambas entidades
+- `compare_entities_with_ai()` - Comparación 1v1 con LLM
+- `classify_entity_with_ai()` - Clasifica entidad con LSH + comparaciones
+- `batch_classify_entities()` - Procesa múltiples entidades
+
+#### 3. Prompts y Schema
+
+**Archivos:**
+- `llm/prompts/entity_pairwise_classification.py` - Schema Pydantic
+- `llm/prompts/entity_pairwise_classification_system_prompt.md.jinja` - Instrucciones para LLM
+- `llm/prompts/entity_pairwise_classification_user_prompt.md.jinja` - Datos de contexto
+
+**Schema de respuesta:**
+```python
 class StructuredOutput(BaseModel):
-    classification: Literal['canonical', 'alias', 'ambiguous', 'not_an_entity'] = Field(
-        description="Clasificación recomendada para la entidad"
-    )
-
-    canonical_ids: Optional[List[int]] = Field(
-        default=None,
-        description="IDs de entidades canónicas (para ALIAS o AMBIGUOUS)"
-    )
-
-    confidence: float = Field(
-        ge=0.0, le=1.0,
-        description="Confianza de 0.0 a 1.0"
-    )
-
-    reasoning: str = Field(
-        description="Explicación breve de la decisión (1-2 frases)"
-    )
-```
-
-**Ejemplo de respuesta:**
-```json
-{
-  "classification": "alias",
-  "canonical_ids": [123],
-  "confidence": 0.92,
-  "reasoning": "Contexto indica que 'Luis' se refiere al presidente Luis Abinader. Aparecen juntos en 42 de 45 artículos con términos como 'presidente' y 'gobierno'."
-}
+    relationship: Literal['same_entity', 'different_entities', 'ambiguous_usage']
+    entity_a_action: Literal['make_alias', 'make_canonical', 'make_not_an_entity', 'no_change']
+    entity_b_action: Literal['make_alias', 'make_canonical', 'make_not_an_entity', 'no_change']
+    confidence: float  # 0.0-1.0
+    reasoning: str
+    alternative_relationship: Optional[...]
+    alternative_confidence: Optional[float]
 ```
 
 ---
 
-## Lógica de Aplicación de Clasificaciones
+## Flujo de Clasificación
 
-### Reglas de Auto-aprobación
+### Caso de Uso: "Luis" vs "Luis Abinader"
 
-| Clasificación | Confianza | Acción | `is_approved` |
-|---------------|-----------|--------|---------------|
-| `alias` | ≥ 90% | Auto-aprobar | `1` ✅ |
-| `alias` | 70-89% | Aplicar pero no aprobar | `0` ⚠️ |
-| `alias` | < 70% | No aplicar (manual) | - |
-| `ambiguous` | ≥ 80% | Auto-aprobar | `1` ✅ |
-| `ambiguous` | 50-79% | Aplicar pero no aprobar | `0` ⚠️ |
-| `ambiguous` | < 50% | No aplicar (manual) | - |
-| `canonical` | Cualquiera | Mantener como está | - |
-| `not_an_entity` | ≥ 85% | Auto-aprobar | `1` ✅ |
-
-### Marcado de Revisión
-
-**Todas las entidades procesadas se marcan:**
 ```python
-entity.last_review_type = 'ai-assisted'
-entity.last_review = datetime.utcnow()
-# is_approved según tabla anterior
-```
+# 1. LSH encuentra candidatos
+candidates = lsh_matcher.find_candidates("Luis", max_candidates=10)
+# Retorna: [("Luis Abinader", 0.65), ("Luis Gil", 0.60), ...]
 
-### Manejo de Conflictos
+# 2. Para cada candidato, comparación 1v1
+result = compare_entities_with_ai(
+    entity_a="Luis",
+    entity_b="Luis Abinader",
+    jaccard_similarity=0.65
+)
 
-Si el algoritmo heurístico ya clasificó una entidad como `last_review_type='algorithmic'`:
+# 3. LLM analiza contexto de AMBAS entidades:
+context = {
+    'entity_a_name': 'Luis',
+    'entity_a_mentions': 45,
+    'entity_a_context': [
+        "El presidente Luis anunció hoy...",
+        "Luis visitó la provincia...",
+    ],
+    'entity_b_name': 'Luis Abinader',
+    'entity_b_mentions': 120,
+    'entity_b_context': [
+        "Luis Abinader firmó el decreto...",
+        "El mandatario Luis Abinader...",
+    ],
+    'shared_articles': 30,  # Aparecen juntos en 30 artículos
+    'jaccard_similarity': 0.65,
+    'cooccurrence_sentences': [
+        "El presidente Luis Abinader, a quien también llaman Luis..."
+    ]
+}
 
-**Regla:** El LLM puede **sobrescribir** si:
-- Confianza del LLM ≥ 85%
-- Clasificación del LLM difiere de la algorítmica
+# 4. LLM responde:
+{
+    'relationship': 'same_entity',
+    'entity_a_action': 'make_alias',      # "Luis" → ALIAS
+    'entity_b_action': 'no_change',       # "Luis Abinader" sigue CANONICAL
+    'confidence': 0.92,
+    'reasoning': 'Alta co-ocurrencia (30 artículos) y contexto presidencial compartido.'
+}
 
-**Ejemplo:**
-```
-Estado actual:
-- Entidad: "BC"
-- classified_as: ALIAS → "Banco Central"
-- last_review_type: 'algorithmic'
-- is_approved: 1
-
-LLM sugiere:
-- classification: 'ambiguous'
-- canonical_ids: [45, 67]  # "Banco Central" y "Barcelona FC"
-- confidence: 0.88
-
-Acción:
-- Convertir a AMBIGUOUS
-- Actualizar canonical_refs
-- last_review_type = 'ai-assisted'
-- is_approved = 0  (requiere confirmación humana por cambio)
+# 5. Aplicar acciones (si confidence ≥0.70):
+# - "Luis" se convierte en ALIAS de "Luis Abinader"
+# - Ambas entidades marcadas como last_review_type='ai-assisted'
+# - Ambas aprobadas (is_approved=1) porque confidence ≥0.90
 ```
 
 ---
 
-## Integración con Sistema Existente
+## Niveles de Confianza y Auto-Aprobación
 
-### Reutilización de Componentes
+### Confianza por Tipo de Relación
 
-| Componente | Origen | Uso en IA-Assisted |
-|------------|--------|-------------------|
-| `entity_tokens` | Auto-classification | Pre-filtrado de candidatos |
-| `openai_structured_output()` | Flash News generation | Llamada genérica a LLM |
-| Prompt templates (Jinja2) | Core clustering | Sistema de prompts |
-| `set_as_alias()` / `set_as_ambiguous()` | Entity models | Aplicar clasificaciones |
-| Batch processing | Article enrichment | Procesar en lotes con logs |
-| Cascade updates | Auto-classification | Actualizar dependientes |
+| Relación | Umbral Auto-Aprobación | Ejemplo |
+|----------|------------------------|---------|
+| `same_entity` | ≥ 0.90 | "Luis" → "Luis Abinader" (clara evidencia) |
+| `different_entities` | ≥ 0.80 | "Luis Abinader" vs "Luis Gil" (distintos) |
+| `ambiguous_usage` | ≥ 0.85 | "Luis" puede ser varios (conservador) |
 
-### Nueva Tabla: `entity_classification_suggestions`
+### Acciones según Confianza
 
-Para auditoría y revisión manual posterior:
+**Confianza ≥ 70%:**
+- ✅ **APLICAR** cambios en clasificación de ambas entidades
+- 📝 Guardar sugerencia con `applied=1`
+- 🔍 Aprobar automáticamente si confianza supera umbral específico
 
-| Campo | Tipo | Descripción |
-|-------|------|-------------|
-| `id` | INTEGER | ID único |
-| `entity_id` | INTEGER | Entidad evaluada |
-| `suggested_classification` | VARCHAR(20) | 'alias', 'ambiguous', 'not_an_entity' |
-| `suggested_canonical_ids` | JSON | IDs sugeridos (array) |
-| `confidence` | FLOAT | 0.0 - 1.0 |
-| `reasoning` | TEXT | Explicación del LLM |
-| `applied` | INTEGER | 0 = sugerencia, 1 = aplicada |
-| `approved_by_user` | INTEGER | NULL, 0 = rechazada, 1 = aprobada |
-| `created_at` | DATETIME | Timestamp |
+**Confianza < 70%:**
+- ❌ **NO APLICAR** cambios
+- 📝 Guardar solo como sugerencia (`applied=0`)
+- 👤 Requiere revisión manual
 
-**Propósito:**
-- Auditar todas las sugerencias del LLM
-- Permitir revisión manual de sugerencias de baja confianza
-- Mejorar el sistema con feedback humano
+**SIEMPRE (todos los casos):**
+- Marcar ambas entidades como `last_review_type='ai-assisted'`
+- Guardar en `entity_classification_suggestions` para auditoría
 
 ---
 
-## Workflow de Uso
+## Diferencias Clave: "Aplicar" vs "Guardar Sugerencia"
 
-### Flujo Completo Recomendado
+### APLICAR (confianza ≥70%)
+- **Cambia la clasificación inmediatamente** en la base de datos
+- La entidad queda clasificada (ALIAS, CANONICAL, etc.) y puede ser usada por el sistema
+- Se marca como `last_review_type='ai-assisted'`
+- Campo `applied=1` en la tabla de sugerencias
+- **Ejemplo:** "Luis" pasa de CANONICAL → ALIAS de "Luis Abinader" **ahora mismo**
 
-```bash
-# PASO 1: Ejecutar clasificación algorítmica primero (gratis y rápido)
-uv run news entity auto-classify
+### GUARDAR SUGERENCIA (confianza <70%)
+- **NO cambia** la clasificación de la entidad
+- Solo guarda la recomendación del LLM en `entity_classification_suggestions`
+- La entidad mantiene su clasificación actual
+- Un humano debe revisar y decidir manualmente si aplicarla
+- Campo `applied=0` en la tabla de sugerencias
+- **Ejemplo:** "Luis" permanece CANONICAL, pero hay una sugerencia pendiente
 
-# Resultado:
-# - Casos obvios: aprobados automáticamente (is_approved=1)
-# - Casos dudosos: clasificados pero sin aprobar (is_approved=0)
+### Tabla Comparativa
 
-# PASO 2: Ejecutar clasificación con IA para casos dudosos
-uv run news entity ai-classify --min-confidence 0.70
+| Confianza | Relación | Aplicar | Aprobar | Estado Final |
+|-----------|----------|---------|---------|--------------|
+| 95% | same_entity | ✅ Sí | ✅ Sí | ALIAS aplicado + aprobado |
+| 75% | same_entity | ✅ Sí | ❌ No | ALIAS aplicado + no aprobado (revisar) |
+| 55% | same_entity | ❌ No | ❌ No | Sugerencia guardada (no aplicada) |
 
-# Resultado:
-# - Confianza ≥90%: aprobados automáticamente
-# - Confianza 70-89%: aplicados pero para revisión
-# - Confianza <70%: solo guardados como sugerencias
+---
 
-# PASO 3: Revisar manualmente casos que IA no aprobó
-uv run news entity suggestions list --pending-approval
+## Acciones Bidireccionales
+
+A diferencia del enfoque batch (1 vs N), **ambas entidades pueden cambiar**:
+
+### Ejemplo 1: Alias Simple
+```
+Entity A: "Luis" (CANONICAL)
+Entity B: "Luis Abinader" (CANONICAL)
+
+LLM decide:
+- entity_a_action: 'make_alias'
+- entity_b_action: 'no_change'
+
+Resultado:
+- "Luis" → ALIAS de "Luis Abinader"
+- "Luis Abinader" → Permanece CANONICAL
 ```
 
-### 1. Ejecutar Clasificación IA
+### Ejemplo 2: Ambos son Aliases (caso raro)
+```
+Entity A: "BCRD" (CANONICAL)
+Entity B: "Banco Central RD" (CANONICAL)
+
+LLM decide:
+- entity_a_action: 'make_alias'
+- entity_b_action: 'make_alias'
+
+Problema: No se puede aplicar (ambos quieren ser alias)
+Solución: Retorna False, no aplica cambios
+```
+
+### Ejemplo 3: Error de NER
+```
+Entity A: "Ayer" (CANONICAL, GPE) ← Error del NER
+Entity B: "Ayerbe" (CANONICAL, PERSON)
+
+LLM decide:
+- entity_a_action: 'make_not_an_entity'  ← Detecta error
+- entity_b_action: 'no_change'
+
+Resultado:
+- "Ayer" → NOT_AN_ENTITY (limpia error)
+- "Ayerbe" → Permanece CANONICAL
+```
+
+---
+
+## Comando CLI
 
 ```bash
-# Dry-run para previsualizar (recomendado primero)
+# Clasificar todas las entidades algorítmicas no aprobadas
+uv run news entity ai-classify
+
+# Filtrar por tipo
+uv run news entity ai-classify --type person
+uv run news entity ai-classify --type org
+
+# Limitar cantidad
+uv run news entity ai-classify --limit 100
+
+# Ajustar confianza mínima (default: 0.70)
+uv run news entity ai-classify --min-confidence 0.80
+
+# Ajustar máximo de candidatos por entidad (default: 10)
+uv run news entity ai-classify --max-candidates 5
+
+# Dry-run (simular sin aplicar cambios)
 uv run news entity ai-classify --dry-run
 
-# Aplicar clasificaciones con confianza alta (≥90% = auto-aprobar)
-uv run news entity ai-classify --min-confidence 0.90
-
-# Aplicar todas las sugerencias (≥70% = aplicar pero revisar después)
-uv run news entity ai-classify --min-confidence 0.70
-
-# Procesar solo un tipo de entidad
-uv run news entity ai-classify --type person --min-confidence 0.85
-
-# Limitar cantidad de entidades a procesar
-uv run news entity ai-classify --limit 100
+# Combinar opciones
+uv run news entity ai-classify --type person --limit 50 --min-confidence 0.75
 ```
 
-### 2. Revisar Sugerencias de Baja Confianza
+**Output:**
+```
+🤖 Clasificando entidades con IA...
 
+📊 Estadísticas:
+   Procesadas:               100
+   Éxitos:                   75
+   Aplicadas:                60
+   Auto-aprobadas:           45
+   Confianza baja:           20
+   Sin candidatos:           3
+   Errores:                  2
+
+✅ Clasificación completada
+```
+
+---
+
+## Optimizaciones de Rendimiento
+
+### 1. LSH Reduce Complejidad
+- **Sin LSH (naive)**: O(n²) comparaciones
+  - 10,000 entidades = 50,000,000 comparaciones = $20,000
+- **Con LSH**: O(n·k) donde k ≈ 5-10
+  - 10,000 entidades × 5 candidatos = 50,000 comparaciones = $20
+  - **Reducción de 1000x**
+
+### 2. Índice Reutilizable
+```python
+# Construir índice una vez
+lsh_matcher = build_lsh_index_for_type(session, 'person', threshold=0.4)
+
+# Reusar para múltiples entidades
+for entity in entities:
+    candidates = lsh_matcher.find_candidates(entity)
+    # No reconstruye el índice cada vez
+```
+
+### 3. Agrupación por Tipo
+El batch agrupa entidades por tipo y construye un índice LSH por tipo:
+```python
+# En lugar de:
+# - Procesar 1000 PERSON → construir índice 1000 veces
+# Hace:
+# - Construir índice PERSON una vez
+# - Procesar 1000 PERSON con mismo índice
+```
+
+### 4. Threshold Configurable
+```python
+# Threshold bajo = más candidatos (más recall, menos precision)
+matcher = EntityLSHMatcher(threshold=0.3)  # 30% similitud
+
+# Threshold alto = menos candidatos (más precision, menos recall)
+matcher = EntityLSHMatcher(threshold=0.6)  # 60% similitud
+
+# Balance recomendado: 0.4 (40%)
+```
+
+---
+
+## Costos Estimados
+
+### Por Comparación
+- **Tokens de entrada**: ~800 tokens (contexto de ambas entidades)
+- **Tokens de salida**: ~100 tokens (respuesta estructurada)
+- **Costo con gpt-5-nano**: ~$0.0004 por comparación
+
+### Ejemplo Real
+- **1,000 entidades algorítmicas sin aprobar**
+- **5 candidatos promedio por entidad** (gracias a LSH)
+- **5,000 comparaciones totales**
+- **Costo total: $2.00**
+
+### Comparación sin LSH
+- **1,000 entidades**
+- **100 candidatos promedio** (comparar con todas las CANONICAL)
+- **100,000 comparaciones totales**
+- **Costo total: $40.00**
+- **Ahorro con LSH: $38.00 (95%)**
+
+---
+
+## Tabla de Base de Datos
+
+### `entity_classification_suggestions`
+
+Almacena todas las sugerencias del LLM para auditoría y feedback:
+
+```sql
+CREATE TABLE entity_classification_suggestions (
+    id INTEGER PRIMARY KEY,
+    entity_id INTEGER NOT NULL,  -- FK a named_entities
+
+    -- Sugerencia del LLM
+    suggested_classification VARCHAR(20) NOT NULL,  -- "pairwise:same_entity"
+    suggested_canonical_ids JSON,                   -- [entity_b_id]
+    confidence FLOAT NOT NULL,
+    reasoning TEXT NOT NULL,
+
+    -- Alternativa (si confianza no es muy alta)
+    alternative_classification VARCHAR(20),
+    alternative_confidence FLOAT,
+
+    -- Estado de aplicación
+    applied INTEGER NOT NULL DEFAULT 0,        -- 0=solo sugerencia, 1=aplicado
+    approved_by_user INTEGER,                  -- NULL=pendiente, 0=rechazado, 1=aprobado
+
+    created_at DATETIME NOT NULL,
+
+    FOREIGN KEY (entity_id) REFERENCES named_entities(id) ON DELETE CASCADE
+);
+```
+
+**Ejemplo de registro:**
+```json
+{
+    "id": 123,
+    "entity_id": 456,
+    "suggested_classification": "pairwise:same_entity",
+    "suggested_canonical_ids": [789],
+    "confidence": 0.92,
+    "reasoning": "vs Luis Abinader: Alta co-ocurrencia (30 artículos) y contexto presidencial compartido.",
+    "applied": 1,
+    "approved_by_user": null,
+    "created_at": "2025-01-20 15:30:00"
+}
+```
+
+---
+
+## Testing y Validación
+
+### Dry-Run Mode
 ```bash
-# Ver sugerencias no aplicadas (confianza < umbral)
-uv run news entity suggestions list --not-applied
+# Simular sin aplicar cambios
+uv run news entity ai-classify --dry-run --limit 10
+```
 
-# Ver sugerencias aplicadas pero no aprobadas
-uv run news entity suggestions list --pending-approval
+Esto:
+- ✅ Llama al LLM
+- ✅ Calcula confianza
+- ✅ Muestra decisiones
+- ❌ NO modifica entidades
+- ❌ NO guarda sugerencias
 
-# Aprobar una sugerencia específica
-uv run news entity suggestions approve <suggestion_id>
+### Validar Resultados
+```python
+# Revisar sugerencias guardadas
+from db.models import EntityClassificationSuggestion
 
-# Rechazar una sugerencia
+suggestions = session.query(EntityClassificationSuggestion).filter(
+    EntityClassificationSuggestion.applied == 1,
+    EntityClassificationSuggestion.confidence >= 0.90
+).all()
+
+for s in suggestions:
+    print(f"Entity {s.entity_id}: {s.suggested_classification} ({s.confidence:.2f})")
+    print(f"  Reasoning: {s.reasoning}")
+```
+
+---
+
+## Mejoras Futuras
+
+### 1. Comando para Revisar Sugerencias
+```bash
+uv run news entity suggestions list
+uv run news entity suggestions apply <suggestion_id>
 uv run news entity suggestions reject <suggestion_id>
 ```
 
-### 3. Generar Reportes
+### 2. Feedback Loop
+- Usuarios aprueban/rechazan sugerencias
+- Sistema aprende de feedback
+- Ajusta thresholds automáticamente
 
-```bash
-# Reporte de clasificaciones del último batch
-uv run news entity ai-classify --report
-
-# Estadísticas de accuracy
-uv run news entity suggestions stats
-```
-
-**Salida esperada:**
-```
-📊 Reporte de Clasificación Asistida por IA
-
-Entidades procesadas: 250
-├─ Auto-aprobadas (confianza ≥90%): 180 (72%)
-│  ├─ ALIAS: 120
-│  ├─ AMBIGUOUS: 50
-│  └─ NOT_AN_ENTITY: 10
-├─ Aplicadas sin aprobar (70-89%): 45 (18%)
-└─ Sugeridas para revisión manual (<70%): 25 (10%)
-
-Tiempo promedio por entidad: 2.3 segundos
-Costo estimado (API): $0.08
-```
-
----
-
-## Consideraciones Técnicas
-
-### 1. Costos de API
-
-**Estimación por entidad:**
-- Tokens de entrada: ~500-800 (contexto + candidatos)
-- Tokens de salida: ~100-150 (respuesta estructurada)
-- Costo por entidad: **$0.0003 - $0.0005** (con GPT-5-nano)
-
-**Para 10,000 entidades:** $3 - $5 USD
-
-**Optimizaciones:**
-- Pre-filtrar con reverse index (reduce candidatos enviados)
-- Procesar en batch (compartir contexto común)
-- Usar modelo más económico para casos simples (GPT-5-nano)
-- Cachear resultados de entidades similares
-
-### 2. Velocidad de Procesamiento
-
-| Paso | Tiempo | Cuello de botella |
-|------|--------|-------------------|
-| Filtrado de candidatos | <1ms | Reverse index (indexado) |
-| Extracción de contexto | 10-50ms | Queries SQL |
-| Llamada a LLM | 1-3s | API de OpenAI |
-| Aplicación de clasificación | <10ms | Updates SQL |
-| **Total por entidad** | **~2-4s** | **LLM API** |
-
-**Paralelización:**
-- Procesar 10 entidades en paralelo → 10,000 entidades en ~30-60 minutos
-
-### 3. Manejo de Errores
-
-**Estrategia resiliente:**
-
+### 3. Métricas de Calidad
 ```python
-def classify_entity_with_ai(entity, session):
-    try:
-        # 1. Pre-filtrado
-        candidates = find_candidates_via_index(entity)
-
-        # 2. Extraer contexto
-        context = extract_entity_context(entity, candidates, session)
-
-        # 3. Llamar LLM con retry
-        result = openai_structured_output(
-            'entity_classification',
-            context,
-            max_retries=3
-        )
-
-        # 4. Validar respuesta
-        if result.confidence < MIN_CONFIDENCE:
-            log_suggestion(entity, result, applied=False)
-            return ('skipped', 'low_confidence')
-
-        # 5. Aplicar clasificación
-        apply_classification(entity, result, session)
-        log_suggestion(entity, result, applied=True)
-
-        return ('success', result.classification)
-
-    except OpenAIError as e:
-        log_error(entity, e)
-        return ('error', 'api_failure')
-
-    except Exception as e:
-        log_error(entity, e)
-        return ('error', 'unexpected')
+# Precision: % de sugerencias aplicadas que fueron correctas
+# Recall: % de relaciones correctas que fueron detectadas
+# F1-score: Balance entre precision y recall
 ```
 
-**Ventajas:**
-- Un error no detiene el batch completo
-- Logs detallados por entidad
-- Retry automático de llamadas fallidas
-- Sugerencias guardadas incluso si no se aplican
+### 4. Paralelización
+```python
+# Procesar comparaciones en paralelo
+from concurrent.futures import ThreadPoolExecutor
+
+with ThreadPoolExecutor(max_workers=10) as executor:
+    futures = [
+        executor.submit(compare_entities_with_ai, entity, candidate, ...)
+        for candidate in candidates
+    ]
+    results = [f.result() for f in futures]
+```
+
+### 5. Cache de Comparaciones
+```python
+# Evitar re-comparar los mismos pares
+cache_key = f"{min(entity_a_id, entity_b_id)}:{max(entity_a_id, entity_b_id)}"
+if cache_key in comparison_cache:
+    return comparison_cache[cache_key]
+```
 
 ---
 
-## Mejora Continua
+## Referencias
 
-### Feedback Loop
-
-El sistema aprende de correcciones humanas:
-
-**Proceso:**
-1. Usuario revisa sugerencias de IA
-2. Aprueba o rechaza vía comando CLI
-3. Sistema registra feedback en `entity_classification_suggestions.approved_by_user`
-4. **Futuro:** Reentrenar o ajustar prompts según feedback
-
-**Métricas de Accuracy:**
-```sql
--- Precisión del sistema
-SELECT
-  suggested_classification,
-  COUNT(*) as total,
-  SUM(CASE WHEN approved_by_user = 1 THEN 1 ELSE 0 END) as approved,
-  ROUND(AVG(confidence), 2) as avg_confidence
-FROM entity_classification_suggestions
-WHERE applied = 1
-GROUP BY suggested_classification;
-```
-
-**Output esperado:**
-```
-classification | total | approved | avg_confidence
----------------|-------|----------|---------------
-alias          | 450   | 425      | 0.89
-ambiguous      | 180   | 165      | 0.78
-not_an_entity  | 35    | 32       | 0.91
-```
-
-### Ajuste de Umbrales
-
-Según resultados de producción, ajustar:
-
-| Parámetro | Actual | Ajuste Posible |
-|-----------|--------|----------------|
-| `MIN_CONFIDENCE_AUTO_APPROVE` | 0.90 | 0.85 si accuracy >95% |
-| `MIN_CONFIDENCE_APPLY` | 0.70 | 0.75 si muchos falsos positivos |
-| `MAX_CANDIDATES_TO_LLM` | 5 | 10 si se pierden matches |
+- **LSH explicado**: https://en.wikipedia.org/wiki/Locality-sensitive_hashing
+- **MinHash**: https://en.wikipedia.org/wiki/MinHash
+- **Datasketch library**: https://github.com/ekzhu/datasketch
+- **Structured Outputs (OpenAI)**: https://platform.openai.com/docs/guides/structured-outputs
 
 ---
 
-## Comparación: Algoritmo vs IA
+## Notas Importantes
 
-| Aspecto | Clasificación Algorítmica | Clasificación con IA |
-|---------|---------------------------|----------------------|
-| **Velocidad** | Instantánea (~1ms) | 2-4 segundos por entidad |
-| **Costo** | $0 | ~$0.0004 por entidad |
-| **Precisión** | 75-85% (casos simples) | 90-95% (casos complejos) |
-| **Casos soportados** | Iniciales, nombres parciales | Sinónimos, contexto, ambigüedad |
-| **Explainability** | Reglas fijas | Razonamiento del LLM |
-| **Escalabilidad** | Miles/minuto | Cientos/minuto |
-| **Mejor para** | Casos obvios (JCE → Junta) | Casos ambiguos (Luis → ¿quién?) |
+1. **LSH no es determinístico**: Puede encontrar candidatos ligeramente diferentes en ejecuciones distintas (depende de random seeds en MinHash)
 
-**Estrategia recomendada (flujo híbrido):**
-1. **Clasificación algorítmica primero** (gratis, rápida, procesa miles)
-   - Aprueba casos obvios (`is_approved=1`)
-   - Clasifica pero no aprueba casos dudosos (`is_approved=0`)
-2. **IA para casos no aprobados** (costo bajo, agrega precisión)
-   - Solo procesa `last_review_type='algorithmic'` + `is_approved=0`
-   - Ahorro: solo paga por entidades que realmente necesitan IA
-3. **Revisión manual** solo para casos extremadamente ambiguos
-   - Solo entidades que IA tampoco aprobó
+2. **Threshold es crítico**:
+   - Muy bajo (0.2) → Demasiados candidatos (lento, costoso)
+   - Muy alto (0.7) → Pocos candidatos (pierde matches)
+   - Recomendado: **0.4** (40% similitud)
 
-**Ejemplo de ahorro:**
-- 10,000 entidades detectadas por NER
-- Algoritmo procesa 10,000 (gratis) → aprueba 7,000, deja 3,000 sin aprobar
-- IA procesa solo 3,000 ($1.20) → aprueba 2,500, deja 500 para manual
-- Manual: solo 500 entidades (5% del total)
-- **Ahorro vs procesar todo con IA:** $3 (70% menos costo)
+3. **Solo compara con CANONICAL**: LSH solo indexa entidades ya marcadas como CANONICAL para evitar alias-alias comparisons
 
----
+4. **Sesgo geográfico**: Los prompts incluyen convenciones dominicanas específicas (partidos políticos, lugares, nombres comunes)
 
-## Próximos Pasos
-
-### Fase 1: Implementación Base ✅ (Planeada)
-- [x] Diseño de arquitectura
-- [ ] Implementar `entity_classification.py` (processor)
-- [ ] Crear prompts (system + user)
-- [ ] Schema Pydantic para respuesta estructurada
-- [ ] Comando CLI `entity ai-classify`
-
-### Fase 2: Optimizaciones
-- [ ] Batch processing con paralelización
-- [ ] Sistema de sugerencias (`entity_classification_suggestions`)
-- [ ] Comando de revisión (`entity suggestions`)
-- [ ] Métricas y reportes
-
-### Fase 3: Mejora Continua
-- [ ] Feedback loop (aprender de correcciones)
-- [ ] A/B testing de prompts
-- [ ] Fine-tuning de umbrales de confianza
-- [ ] Integración con UI web para revisión
-
----
-
-## Conclusión
-
-La clasificación asistida por IA complementa el sistema algorítmico existente, permitiendo:
-- **Mayor precisión** en casos ambiguos
-- **Comprensión semántica** del contexto
-- **Reducción de trabajo manual** del 60-80%
-- **Auditoría completa** de decisiones
-
-El sistema está diseñado para ser:
-- **Eficiente**: Pre-filtrado con reverse index
-- **Económico**: ~$0.0004 por entidad
-- **Seguro**: Sugerencias auditadas + umbrales de confianza
-- **Escalable**: Procesamiento en batch + paralelización
+5. **No sustituye revisión manual**: El sistema ayuda, pero casos muy complejos aún requieren juicio humano

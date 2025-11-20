@@ -237,6 +237,19 @@ wheels = [
 ]
 
 [[package]]
+name = "datasketch"
+version = "1.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/09/69/307f9e7838f563118f3256b2be0692e0a25ff54f279d036c289270bb6f6e/datasketch-1.7.0.tar.gz", hash = "sha256:6e9913e923655dd5b1bc5ba6eecc1ff597b876a31720a49ed01570ea3069d9e3", size = 97008, upload-time = "2025-11-05T05:47:51.654Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e7/8c/96b7f34fe9e37d2f567ba56ddcdcc6f16bfaa6f3a277031cc517842895e2/datasketch-1.7.0-py3-none-any.whl", hash = "sha256:0a91dacdb623396c398a8d20300943d609319c072491f625da9452c6803e5767", size = 93773, upload-time = "2025-11-05T05:47:50.282Z" },
+]
+
+[[package]]
 name = "distro"
 version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -737,6 +750,7 @@ source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "click" },
+    { name = "datasketch" },
     { name = "hdbscan" },
     { name = "jinja2" },
     { name = "lxml" },
@@ -755,6 +769,7 @@ dependencies = [
 requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.14.2" },
     { name = "click", specifier = "==8.3.0" },
+    { name = "datasketch", specifier = ">=1.7.0" },
     { name = "hdbscan", specifier = "==0.8.40" },
     { name = "jinja2", specifier = "==3.1.6" },
     { name = "lxml", specifier = ">=6.0.2" },
