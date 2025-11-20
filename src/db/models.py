@@ -217,6 +217,7 @@ class NamedEntity(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=False, unique=True, index=True)
+    name_length = Column(Integer, nullable=False, index=True)  # len(name) - for ordering by length
     entity_type = Column(Enum(EntityType), nullable=False)
     detected_types = Column(JSON, nullable=True)  # List of EntityType values spaCy has detected for this entity
 
@@ -234,8 +235,12 @@ class NamedEntity(Base):
     pagerank = Column(Float, nullable=True, default=0.0)  # Raw PageRank score (unnormalized)
     global_relevance = Column(Float, nullable=True, default=0.0, index=True)  # Normalized PageRank (0.0-1.0, min-max scaled)
     last_rank_calculated_at = Column(DateTime, nullable=True, index=True)  # Last time global rank was calculated
-    needs_review = Column(Integer, nullable=False, default=1, index=True)  # 1=needs review, 0=reviewed and correct
-    last_review = Column(DateTime, nullable=True, index=True)  # Last time entity was manually reviewed
+
+    # Review and approval fields
+    last_review_type = Column(String(20), nullable=False, default='none', index=True)  # none, algorithmic, ai-assisted, manual
+    is_approved = Column(Integer, nullable=False, default=0, index=True)  # 0=no, 1=yes
+    last_review = Column(DateTime, nullable=True, index=True)  # Last time entity was reviewed
+
     trend = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
@@ -785,6 +790,29 @@ class NamedEntity(Base):
 
 # Note: No automatic constraint validation for canonical_refs since it's a many-to-many relationship
 # Use the set_as_* helper methods for safe classification changes, which handle all validation
+
+
+class EntityToken(Base):
+    """Reverse index for entity tokens to enable efficient matching."""
+    __tablename__ = 'entity_tokens'
+
+    id = Column(Integer, primary_key=True)
+    entity_id = Column(Integer, ForeignKey('named_entities.id', ondelete='CASCADE'), nullable=False)
+    token = Column(String(100), nullable=False)  # Original token with formatting (e.g., "J.C.E.", "Junta")
+    token_normalized = Column(String(100), nullable=False, index=True)  # Normalized: lowercase, no accents, no periods
+    position = Column(Integer, nullable=False)  # Position in entity name (0-indexed)
+    is_stopword = Column(Integer, nullable=False, default=0)  # 0=no, 1=yes
+    seems_like_initials = Column(Integer, nullable=False, default=0, index=True)  # 0=no, 1=yes (all caps, single token)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Indexes for efficient searches
+    __table_args__ = (
+        Index('idx_entity_tokens_entity', 'entity_id'),
+        Index('idx_entity_tokens_composite', 'token_normalized', 'entity_id'),
+    )
+
+    def __repr__(self):
+        return f"<EntityToken(entity_id={self.entity_id}, token='{self.token}', normalized='{self.token_normalized}', position={self.position})>"
 
 
 class ProcessingBatch(Base):

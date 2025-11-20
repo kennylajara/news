@@ -485,12 +485,14 @@ def create(name, entity_type, description, photo_url, canonical):
         # Create entity
         entity = NamedEntity(
             name=name,
+            name_length=len(name),
             entity_type=type_enum,
             detected_types=[type_enum.value],
             description=description,
             photo_url=photo_url,
             classified_as=EntityClassification.CANONICAL if canonical else EntityClassification.CANONICAL,
-            needs_review=0,  # Manually created entities don't need review
+            last_review_type='manual',  # Manually created
+            is_approved=1,  # Manually created entities are approved
             article_count=0
         )
 

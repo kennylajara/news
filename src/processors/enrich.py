@@ -254,10 +254,10 @@ def calculate_local_relevance_with_classification(
             # Create new entity
             entity = NamedEntity(
                 name=entity_text,
+                name_length=len(entity_text),
                 entity_type=entity_type,
                 detected_types=[entity_type.value],
                 article_count=1,
-                needs_review=1,
                 trend=0
             )
             session.add(entity)
