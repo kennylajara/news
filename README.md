@@ -249,12 +249,14 @@ uv run news entity search "Luis"
 
 ### MVP
 
-- NER puede crear alias de nombres de personas y organizaciones automáticamente (nombres, apellidos e iniciales).
+- AI Assisted entity classification
 - Forzar a Spacy a detectar títulos si están colocados antes del nombre de una persona: Ministro, presidente, diputado
 - Forzar NER a detectar referencias aprobadas
 - Hacer que la IA pueda revisar hacer review de las entidades (con flag --auto-accept)
 - Relevancia por categoria
 - Calcular relevancia de las noticias antes de crear noticias flash
+- Calcular embeddings de la noticias
+- Crear embeddings de perfiles de usuarios (basado en los de las noticias con las que interactúan)
 - API REST para consulta de artículos
 - Frontend para visualización
 - newsletter
