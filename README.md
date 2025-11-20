@@ -232,6 +232,7 @@ uv run news entity search "Luis"
 - **[Caché de URLs](docs/cache.md)** - Sistema de caché persistente para desarrollo
 - **[Crear Extractores](docs/extractors.md)** - Guía completa con templates y ejemplos
 - **[Procesamiento](docs/processing.md)** - Sistema de batches y NER con spaCy
+- **[Auto-Clasificación de Entidades](docs/auto-classification.md)** - Sistema automático para detectar aliases y entidades ambiguas
 
 ## Fuentes Soportadas
 
@@ -246,19 +247,28 @@ uv run news entity search "Luis"
 
 ## Roadmap
 
+### MVP
+
 - NER puede crear alias de nombres de personas y organizaciones automáticamente (nombres, apellidos e iniciales).
+- Forzar a Spacy a detectar títulos si están colocados antes del nombre de una persona: Ministro, presidente, diputado
 - Forzar NER a detectar referencias aprobadas
 - Hacer que la IA pueda revisar hacer review de las entidades (con flag --auto-accept)
-- Calcular relevancia de las noticias antes de publicar
+- Relevancia por categoria
+- Calcular relevancia de las noticias antes de crear noticias flash
 - API REST para consulta de artículos
 - Frontend para visualización
-- Comentarios por entidades
-- Sistema de publicación automática
-- Descarga asíncrona con aiohttp
-- Validar calidad de la información extraída (validar el JSON tras extracción)
-- Entidades canónicas (unir 2 entidades) 
-- Desambiguación de entidades (una entidad puede referenciar a más de 2)
-- Relevancia por categoria
-- Reconocer monedas como un tipo de entidad (dólar, los dólares canadiense, peso, peso dominicano), diferenciarlo de MONEY (100 dólares, un peso, 100 pesos dominicanos)
-- Crear batches en el pagerank y guardar el motivo de finalización del cálculo (max iter, timeout, convergencia)
+- newsletter
+  - Suscripción
+  - Plantillas de correo (TXT, HTML y AMP)
+  - Endpoint de desarrollo para visualizar correos
+  - Enviar noticias flash por email
+
+### Improvements
+
 - limpiar prints
+- Sistema de publicación automática
+- Validar calidad de la información extraída (validar el JSON tras extracción)
+- Reconocer monedas como un tipo de entidad (dólar, los dólares canadiense, peso, peso dominicano), diferenciarlo de MONEY (100 dólares, un peso, 100 pesos dominicanos)
+- Descarga asíncrona con aiohttp
+- Comentarios por entidades
+- Crear batches en el pagerank y guardar el motivo de finalización del cálculo (max iter, timeout, convergencia)
