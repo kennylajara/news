@@ -1399,3 +1399,116 @@ def list_members(group_id, active_at, show_dates):
 
     finally:
         session.close()
+
+
+@entity.command()
+@click.option('--type', 'entity_type', type=click.Choice(['person', 'org', 'all'], case_sensitive=False), default='all', help='Filter by entity type')
+@click.option('--dry-run', is_flag=True, default=False, help='Show what would be done without applying changes')
+@click.option('--limit', type=int, default=None, help='Maximum number of entities to process')
+def auto_classify(entity_type, dry_run, limit):
+    """
+    Automatically classify entities using heuristic pattern matching.
+
+    This command processes entities with last_review_type='none' and attempts to
+    classify them as ALIAS or AMBIGUOUS based on pattern matching with longer entities.
+
+    Examples:
+        news entity auto-classify --dry-run
+        news entity auto-classify --type person --limit 50
+        news entity auto-classify
+    """
+    from db.database import Database
+    from db.models import NamedEntity, EntityType
+    from processors.auto_classify import classify_entity
+
+    db = Database()
+    session = db.get_session()
+
+    try:
+        # Build query for entities to process
+        query = session.query(NamedEntity).filter(
+            NamedEntity.last_review_type == 'none'
+        ).order_by(NamedEntity.name_length.asc())  # Process short → long
+
+        # Filter by type if specified
+        if entity_type != 'all':
+            if entity_type == 'person':
+                query = query.filter(NamedEntity.entity_type == EntityType.PERSON)
+            elif entity_type == 'org':
+                query = query.filter(NamedEntity.entity_type == EntityType.ORG)
+
+        # Apply limit
+        if limit:
+            query = query.limit(limit)
+
+        entities = query.all()
+
+        if not entities:
+            click.echo(click.style("No entities found with last_review_type='none'", fg="yellow"))
+            return
+
+        click.echo(f"Processing {len(entities)} entities{'(DRY RUN)' if dry_run else ''}...\n")
+
+        # Statistics
+        stats = {
+            'processed': 0,
+            'alias': 0,
+            'ambiguous': 0,
+            'confirm': 0,
+            'no_match': 0,
+            'error': 0
+        }
+
+        # Process each entity
+        for entity in entities:
+            action, canonical, reason = classify_entity(entity, session, dry_run=dry_run)
+
+            stats['processed'] += 1
+            stats[action] = stats.get(action, 0) + 1
+
+            # Color code output
+            if action == 'alias':
+                color = 'green'
+                icon = '✓'
+            elif action == 'ambiguous':
+                color = 'yellow'
+                icon = '⚠'
+            elif action == 'confirm':
+                color = 'cyan'
+                icon = '='
+            elif action == 'no_match':
+                color = 'white'
+                icon = 'ℹ'
+            else:  # error
+                color = 'red'
+                icon = '✗'
+
+            click.echo(click.style(
+                f"{icon} [{entity.id}] {entity.name} ({entity.name_length} chars): {reason}",
+                fg=color
+            ))
+
+        # Commit changes if not dry-run
+        if not dry_run:
+            session.commit()
+            click.echo(click.style(f"\n✓ Changes committed to database", fg="green"))
+        else:
+            click.echo(click.style(f"\n⚠ DRY RUN - No changes made to database", fg="yellow"))
+
+        # Print summary
+        click.echo(f"\nSummary:")
+        click.echo(f"  Processed: {stats['processed']}")
+        click.echo(click.style(f"  ✓ Created ALIAS: {stats.get('alias', 0)}", fg="green"))
+        click.echo(click.style(f"  ⚠ Marked AMBIGUOUS: {stats.get('ambiguous', 0)}", fg="yellow"))
+        click.echo(click.style(f"  = Confirmed existing: {stats.get('confirm', 0)}", fg="cyan"))
+        click.echo(f"  ℹ No match: {stats.get('no_match', 0)}")
+        if stats.get('error', 0) > 0:
+            click.echo(click.style(f"  ✗ Errors: {stats.get('error', 0)}", fg="red"))
+
+    except Exception as e:
+        click.echo(click.style(f"✗ Error: {str(e)}", fg="red"))
+        import traceback
+        traceback.print_exc()
+
+    finally:
+        session.close()

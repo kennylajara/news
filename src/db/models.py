@@ -348,6 +348,119 @@ class NamedEntity(Base):
         self.classified_as = EntityClassification.CANONICAL
         self.canonical_refs = []
 
+    def _update_dependents_on_canonical_to_alias(self, new_canonical_entity, session):
+        """
+        Update dependent entities when a CANONICAL entity becomes an ALIAS.
+
+        This is called BEFORE changing self from CANONICAL to ALIAS.
+
+        Rules:
+        - Dependent ALIAS entities: redirect to new_canonical_entity
+        - Dependent AMBIGUOUS entities: replace self with new_canonical_entity in their list
+
+        Args:
+            new_canonical_entity: The new canonical this entity will point to
+            session: SQLAlchemy session
+        """
+        if self.classified_as != EntityClassification.CANONICAL:
+            # This method should only be called on CANONICAL entities
+            return
+
+        # Find all ALIAS entities pointing to self
+        dependent_aliases = session.query(NamedEntity).join(
+            entity_canonical_refs,
+            NamedEntity.id == entity_canonical_refs.c.entity_id
+        ).filter(
+            entity_canonical_refs.c.canonical_id == self.id,
+            NamedEntity.classified_as == EntityClassification.ALIAS
+        ).all()
+
+        # Find all AMBIGUOUS entities that have self in their canonical_refs
+        dependent_ambiguous = session.query(NamedEntity).join(
+            entity_canonical_refs,
+            NamedEntity.id == entity_canonical_refs.c.entity_id
+        ).filter(
+            entity_canonical_refs.c.canonical_id == self.id,
+            NamedEntity.classified_as == EntityClassification.AMBIGUOUS
+        ).all()
+
+        # Update ALIAS dependents: redirect to new canonical
+        for alias_entity in dependent_aliases:
+            alias_entity.canonical_refs = [new_canonical_entity]
+
+        # Update AMBIGUOUS dependents: replace self with new_canonical in list
+        for ambiguous_entity in dependent_ambiguous:
+            # Remove self from list and add new_canonical_entity
+            current_canonicals = [e for e in ambiguous_entity.canonical_refs if e.id != self.id]
+
+            # Add new canonical if not already in list
+            if new_canonical_entity.id not in {e.id for e in current_canonicals}:
+                current_canonicals.append(new_canonical_entity)
+
+            # Ensure we still have at least 2 canonicals
+            if len(current_canonicals) >= 2:
+                ambiguous_entity.canonical_refs = current_canonicals
+            else:
+                # If only 1 canonical left, convert to ALIAS
+                ambiguous_entity.classified_as = EntityClassification.ALIAS
+                ambiguous_entity.canonical_refs = current_canonicals
+
+    def _update_dependents_on_canonical_to_ambiguous(self, new_canonical_entities, session):
+        """
+        Update dependent entities when a CANONICAL entity becomes AMBIGUOUS.
+
+        This is called BEFORE changing self from CANONICAL to AMBIGUOUS.
+
+        Rules:
+        - Dependent ALIAS entities: convert to AMBIGUOUS with same canonicals
+        - Dependent AMBIGUOUS entities: replace self with new_canonical_entities (expand list)
+
+        Args:
+            new_canonical_entities: List of new canonicals this entity will point to
+            session: SQLAlchemy session
+        """
+        if self.classified_as != EntityClassification.CANONICAL:
+            # This method should only be called on CANONICAL entities
+            return
+
+        # Find all ALIAS entities pointing to self
+        dependent_aliases = session.query(NamedEntity).join(
+            entity_canonical_refs,
+            NamedEntity.id == entity_canonical_refs.c.entity_id
+        ).filter(
+            entity_canonical_refs.c.canonical_id == self.id,
+            NamedEntity.classified_as == EntityClassification.ALIAS
+        ).all()
+
+        # Find all AMBIGUOUS entities that have self in their canonical_refs
+        dependent_ambiguous = session.query(NamedEntity).join(
+            entity_canonical_refs,
+            NamedEntity.id == entity_canonical_refs.c.entity_id
+        ).filter(
+            entity_canonical_refs.c.canonical_id == self.id,
+            NamedEntity.classified_as == EntityClassification.AMBIGUOUS
+        ).all()
+
+        # Update ALIAS dependents: convert to AMBIGUOUS with same canonicals
+        for alias_entity in dependent_aliases:
+            alias_entity.classified_as = EntityClassification.AMBIGUOUS
+            alias_entity.canonical_refs = new_canonical_entities
+
+        # Update AMBIGUOUS dependents: replace self with new_canonical_entities (expand list)
+        for ambiguous_entity in dependent_ambiguous:
+            # Remove self from list
+            current_canonicals = [e for e in ambiguous_entity.canonical_refs if e.id != self.id]
+
+            # Add all new canonicals if not already in list
+            current_ids = {e.id for e in current_canonicals}
+            for new_canonical in new_canonical_entities:
+                if new_canonical.id not in current_ids:
+                    current_canonicals.append(new_canonical)
+                    current_ids.add(new_canonical.id)
+
+            # Update the list
+            ambiguous_entity.canonical_refs = current_canonicals
+
     def set_as_alias(self, canonical_entity, session):
         """
         Set entity as ALIAS of another canonical entity.
@@ -374,6 +487,10 @@ class NamedEntity(Base):
                 f"Cannot set alias: '{canonical_entity.name}' is not CANONICAL "
                 f"(is {canonical_entity.classified_as.value})"
             )
+
+        # CASCADE: Update dependents if this is currently CANONICAL
+        if self.classified_as == EntityClassification.CANONICAL:
+            self._update_dependents_on_canonical_to_alias(canonical_entity, session)
 
         # Mark articles for recalculation
         self._mark_articles_for_rerank(session)
@@ -425,6 +542,10 @@ class NamedEntity(Base):
                     f"Cannot link to '{entity.name}': not CANONICAL "
                     f"(is {entity.classified_as.value})"
                 )
+
+        # CASCADE: Update dependents if this is currently CANONICAL
+        if self.classified_as == EntityClassification.CANONICAL:
+            self._update_dependents_on_canonical_to_ambiguous(canonical_entities, session)
 
         # Mark articles for recalculation
         self._mark_articles_for_rerank(session)
