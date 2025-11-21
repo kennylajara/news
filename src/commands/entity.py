@@ -21,8 +21,10 @@ def entity():
 @click.option('--type', '-t', 'entity_type', help='Filter by entity type')
 @click.option('--min-articles', '-a', type=int, help='Minimum number of articles')
 @click.option('--order-by', '-o', type=click.Choice(['articles', 'global_rank'], case_sensitive=False), default='articles', help='Order by articles or global_rank')
+@click.option('--review-type', '-r', type=click.Choice(['none', 'algorithmic', 'ai-assisted', 'manual'], case_sensitive=False), help='Filter by last_review_type')
+@click.option('--approved/--not-approved', default=None, help='Filter by is_approved status')
 @click.option('--no-pager', is_flag=True, help='Disable pagination')
-def list(limit, entity_type, min_articles, order_by, no_pager):
+def list(limit, entity_type, min_articles, order_by, review_type, approved, no_pager):
     """
     List named entities with filters.
 
@@ -33,6 +35,8 @@ def list(limit, entity_type, min_articles, order_by, no_pager):
         news entity list --min-articles 5
         news entity list --order-by global_rank
         news entity list --type org --min-articles 10 --order-by global_rank
+        news entity list --review-type algorithmic --not-approved
+        news entity list --review-type ai-assisted --approved
     """
     db = Database()
     session = db.get_session()
@@ -54,6 +58,12 @@ def list(limit, entity_type, min_articles, order_by, no_pager):
 
         if min_articles:
             query = query.filter(NamedEntity.article_count >= min_articles)
+
+        if review_type:
+            query = query.filter(NamedEntity.last_review_type == review_type)
+
+        if approved is not None:
+            query = query.filter(NamedEntity.is_approved == (1 if approved else 0))
 
         # Order by specified field
         if order_by == 'global_rank':
@@ -1402,9 +1412,9 @@ def list_members(group_id, active_at, show_dates):
 
 
 @entity.command()
-@click.option('--type', 'entity_type', type=click.Choice(['person', 'org', 'all'], case_sensitive=False), default='all', help='Filter by entity type')
-@click.option('--dry-run', is_flag=True, default=False, help='Show what would be done without applying changes')
-@click.option('--limit', type=int, default=None, help='Maximum number of entities to process')
+@click.option('--type', '-t', 'entity_type', type=click.Choice(['person', 'org', 'all'], case_sensitive=False), default='all', help='Filter by entity type')
+@click.option('--dry-run', '-d', is_flag=True, default=False, help='Show what would be done without applying changes')
+@click.option('--limit', '-l', type=int, default=None, help='Maximum number of entities to process')
 def auto_classify(entity_type, dry_run, limit):
     """
     Automatically classify entities using heuristic pattern matching.
@@ -1515,11 +1525,13 @@ def auto_classify(entity_type, dry_run, limit):
 
 
 @entity.command()
-@click.option('--type', 'entity_type', type=click.Choice(['person', 'org', 'gpe', 'all'], case_sensitive=False), default='all', help='Filter by entity type')
-@click.option('--limit', type=int, default=None, help='Maximum number of entities to process')
-@click.option('--min-confidence', type=float, default=0.70, help='Minimum confidence threshold (0.0-1.0)')
-@click.option('--dry-run', is_flag=True, default=False, help='Preview changes without applying them')
-def ai_classify(entity_type, limit, min_confidence, dry_run):
+@click.option('--type', '-t', 'entity_type', type=click.Choice(['person', 'org', 'gpe', 'all'], case_sensitive=False), default='all', help='Filter by entity type')
+@click.option('--limit', '-l', type=int, default=None, help='Maximum number of entities to process')
+@click.option('--min-confidence', '-c', type=float, default=0.70, help='Minimum confidence threshold (0.0-1.0)')
+@click.option('--lsh-threshold', type=float, default=0.3, help='LSH similarity threshold for candidate discovery (0.0-1.0)')
+@click.option('--dry-run', '-d', is_flag=True, default=False, help='Preview changes without applying them')
+@click.option('--verbose', '-v', is_flag=True, default=False, help='Show detailed AI decisions')
+def ai_classify(entity_type, limit, min_confidence, lsh_threshold, dry_run, verbose):
     """
     Classify entities using AI/LLM based on semantic context.
 
@@ -1554,6 +1566,7 @@ def ai_classify(entity_type, limit, min_confidence, dry_run):
         click.echo(f"Entity type: {entity_type}")
         click.echo(f"Limit: {limit if limit else 'No limit'}")
         click.echo(f"Min confidence: {min_confidence:.2f}")
+        click.echo(f"LSH threshold: {lsh_threshold:.2f}")
         click.echo(f"Mode: {'DRY RUN' if dry_run else 'APPLY CHANGES'}")
         click.echo(f"{'=' * 60}\n")
 
@@ -1563,12 +1576,39 @@ def ai_classify(entity_type, limit, min_confidence, dry_run):
         # Run batch classification
         click.echo("Processing entities...\n")
 
+        # Verbose callback to show AI decisions
+        def on_result(entity_a, entity_b, status, result, error):
+            if not verbose:
+                return
+            if entity_b:
+                click.echo(f"  [{entity_a.id}] {entity_a.name} vs [{entity_b.id}] {entity_b.name}")
+            else:
+                click.echo(f"  [{entity_a.id}] {entity_a.name}")
+            if status == 'success':
+                for change in result.get('classification_changes', []):
+                    click.echo(click.style(f"    → [{change['entity_id']}] = {change['classification']}", fg="green"))
+                if result.get('reference_changes'):
+                    for ref in result['reference_changes']:
+                        if ref.get('add_refs'):
+                            click.echo(f"    → [{ref['entity_id']}] add_refs: {ref['add_refs']}")
+                click.echo(f"    Confidence: {result.get('confidence', 0):.2f}")
+                click.echo(f"    Reasoning: {result.get('reasoning', '')}...")
+            elif status == 'skipped_low_confidence':
+                click.echo(click.style(f"    ⚠ Low confidence: {error}", fg="yellow"))
+            elif status == 'skipped_no_candidates':
+                click.echo(click.style(f"    ℹ No candidates found", fg="blue"))
+            elif status == 'error':
+                click.echo(click.style(f"    ✗ Error: {error}", fg="red"))
+            click.echo()
+
         stats = batch_classify_entities(
             session=session,
             entity_type=type_filter,
             limit=limit,
             min_confidence=min_confidence,
-            dry_run=dry_run
+            lsh_threshold=lsh_threshold,
+            dry_run=dry_run,
+            on_result=on_result if verbose else None
         )
 
         # Display results

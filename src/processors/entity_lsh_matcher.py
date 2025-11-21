@@ -10,7 +10,7 @@ import re
 from datasketch import MinHash, MinHashLSH
 from sqlalchemy.orm import Session
 
-from db.models import NamedEntity
+from db.models import NamedEntity, EntityType
 
 
 def normalize_text(text: str) -> str:
@@ -43,6 +43,32 @@ def normalize_text(text: str) -> str:
     return text
 
 
+def _is_spanish_plural_initials(text: str) -> bool:
+    """Check if text is Spanish plural initials (e.g., EEUU, EE.UU., EE UU)."""
+    clean = re.sub(r'[\s.]', '', text.upper())
+    if len(clean) < 4 or len(clean) % 2 != 0:
+        return False
+    for i in range(0, len(clean), 2):
+        if clean[i] != clean[i+1] or not clean[i].isalpha():
+            return False
+    return True
+
+
+def _get_spanish_initials_variants(text: str) -> List[str]:
+    """
+    Get both collapsed and expanded variants of Spanish plural initials.
+
+    "EE.UU." -> ["eeuu", "eu"]
+    "EE. UU." -> ["ee uu", "eu"]
+    """
+    clean = re.sub(r'[\s.]', '', text.upper())
+    # Collapsed: take first letter of each pair
+    collapsed = ''.join(clean[i] for i in range(0, len(clean), 2)).lower()
+    # Expanded: the full doubled form
+    expanded = clean.lower()
+    return [expanded, collapsed]
+
+
 def text_to_shingles(text: str, char_ngram_size: int = 3) -> Set[str]:
     """
     Convert text to shingles (word tokens + character n-grams).
@@ -54,8 +80,21 @@ def text_to_shingles(text: str, char_ngram_size: int = 3) -> Set[str]:
     Returns:
         Set of shingle strings
     """
-    text = normalize_text(text)
     shingles = set()
+
+    # For Spanish plural initials, generate shingles for both variants
+    if _is_spanish_plural_initials(text):
+        variants = _get_spanish_initials_variants(text)
+        for variant in variants:
+            shingles.add(variant)
+            # Add character n-grams for each variant
+            for i in range(len(variant) - char_ngram_size + 1):
+                ngram = variant[i:i + char_ngram_size]
+                if ngram.strip():
+                    shingles.add(ngram)
+        return shingles
+
+    text = normalize_text(text)
 
     # Word-level shingles (full words)
     words = text.split()
@@ -213,9 +252,10 @@ def build_lsh_index_for_type(
     """
     from db.models import EntityClassification
 
-    # Query entities
+    # Query entities - convert string to enum if needed
+    type_enum = EntityType[entity_type.upper()] if isinstance(entity_type, str) else entity_type
     query = session.query(NamedEntity).filter(
-        NamedEntity.entity_type == entity_type
+        NamedEntity.entity_type == type_enum
     )
 
     if only_canonical:

@@ -830,11 +830,13 @@ def process_article(article, batch_item, session):
 
         # Extract entities from title, subtitle, and content
         # Note: subtitle is included for NER but NOT for clustering
+        # Use period+space separator to prevent NER from merging entities across parts
+        # (e.g., "...con Epstein" + "Summers dijo..." would merge into "Epstein Summers")
         text_parts = [article.title]
         if article.subtitle:
             text_parts.append(article.subtitle)
         text_parts.append(article.content)
-        text = " ".join(text_parts)
+        text = " ".join([f"{part}." if not part.endswith('.') else part for part in text_parts ])
         entities, entity_contexts = extract_entities(text)
 
         stats['entities_found'] = len(entities)

@@ -83,7 +83,7 @@ def find_candidates_for_entity(
             if not candidates:
                 # First token: get all entities with this token
                 result = session.query(NamedEntity.id).filter(
-                    NamedEntity.id.in_(entity_ids_subq),
+                    NamedEntity.id.in_(entity_ids_subq.select()),
                     NamedEntity.id != entity.id,  # Exclude self
                     NamedEntity.name_length > entity.name_length  # Only longer
                 ).all()
@@ -91,7 +91,7 @@ def find_candidates_for_entity(
             else:
                 # Subsequent tokens: intersect with existing candidates
                 result = session.query(NamedEntity.id).filter(
-                    NamedEntity.id.in_(entity_ids_subq),
+                    NamedEntity.id.in_(entity_ids_subq.select()),
                     NamedEntity.id.in_(list(candidates))
                 ).all()
                 candidates = set([r[0] for r in result])
@@ -112,15 +112,37 @@ def find_candidates_for_entity(
         ])
 
         if initials:
-            # Find entities with seems_like_initials=1 matching these initials
+            # Build list of initials variants to search
+            # Normal: "eu" for "Estados Unidos"
+            # Spanish plural: "eeuu" for "EE. UU." where each token is doubled (ee, uu)
+            initials_variants = [initials]
+
+            # Check if this looks like Spanish plural initials (all tokens are doubled letters)
+            # e.g., "EE" "UU" -> each token_normalized is a single repeated letter
+            is_spanish_plural = all(
+                len(t.token_normalized) == 2 and
+                t.token_normalized[0] == t.token_normalized[1]
+                for t in non_stopword_tokens
+            )
+            if is_spanish_plural:
+                # Also search for the doubled form: "eu" -> "eeuu"
+                doubled_initials = ''.join(c * 2 for c in initials)
+                initials_variants.append(doubled_initials)
+
+            # Find entities with seems_like_initials=1 matching any variant
+            # For Spanish plural initials, don't restrict by length (can match shorter or longer)
+            length_filter = NamedEntity.name_length > entity.name_length
+            if is_spanish_plural:
+                length_filter = True  # No length restriction
+
             initial_result = session.query(NamedEntity.id).join(
                 EntityToken,
                 NamedEntity.id == EntityToken.entity_id
             ).filter(
                 EntityToken.seems_like_initials == 1,
-                EntityToken.token_normalized == initials,
+                or_(*[EntityToken.token_normalized == var for var in initials_variants]),
                 NamedEntity.id != entity.id,
-                NamedEntity.name_length > entity.name_length
+                length_filter
             ).distinct().all()
 
             # Add to candidates set (extract IDs from tuples)
@@ -129,6 +151,50 @@ def find_candidates_for_entity(
                 candidates = set(initial_ids)
             else:
                 candidates.update(initial_ids)
+
+    # ========================================================================
+    # CRITERION 3: Spanish plural initials matching other variants
+    # ========================================================================
+    # If entity is a single initials token (e.g., "EE.UU." with token "eeuu"),
+    # search for other Spanish plural variants of the same initials
+    if entity_seems_like_initials and is_single_token:
+        token_norm = non_stopword_tokens[0].token_normalized
+        # Check if it's Spanish plural format (doubled letters like "eeuu")
+        if len(token_norm) >= 4 and len(token_norm) % 2 == 0:
+            is_doubled = all(
+                token_norm[i] == token_norm[i+1]
+                for i in range(0, len(token_norm), 2)
+            )
+            if is_doubled:
+                # Search for entities with multiple tokens that form the same initials
+                # e.g., "eeuu" -> look for entities with tokens "ee", "uu"
+                collapsed = ''.join(token_norm[i] for i in range(0, len(token_norm), 2))
+
+                # Find entities where concatenating non-stopword tokens = collapsed or token_norm
+                # This is complex, so we search for entities containing ALL the individual letters
+                individual_tokens = [token_norm[i:i+2] for i in range(0, len(token_norm), 2)]
+
+                # Find entities that have ALL these doubled-letter tokens
+                matching_ids = None
+                for doubled_tok in individual_tokens:
+                    subq = session.query(EntityToken.entity_id).filter(
+                        EntityToken.token_normalized == doubled_tok,
+                        EntityToken.is_stopword == 0
+                    ).distinct().subquery()
+
+                    result = session.query(NamedEntity.id).filter(
+                        NamedEntity.id.in_(subq.select()),
+                        NamedEntity.id != entity.id
+                    ).all()
+                    ids = set(r[0] for r in result)
+
+                    if matching_ids is None:
+                        matching_ids = ids
+                    else:
+                        matching_ids &= ids
+
+                if matching_ids:
+                    candidates.update(matching_ids)
 
     # Convert to list of NamedEntity objects
     if candidates:
@@ -225,6 +291,33 @@ def check_initials_match(
 
             if eval_normalized == cand_expanded:
                 return True
+
+    # ========================================================================
+    # CRITERION 3: Spanish plural initials equivalence
+    # ========================================================================
+    # Check if both are variants of the same Spanish plural initials
+    # e.g., "EE.UU." (eeuu) matches "EE. UU." (ee + uu)
+    def get_spanish_plural_normalized(tokens):
+        """Get normalized form for Spanish plural initials comparison."""
+        # Check if single token with doubled letters (eeuu, ffaa)
+        if len(tokens) == 1:
+            t = tokens[0].token_normalized
+            if len(t) >= 4 and len(t) % 2 == 0:
+                if all(t[i] == t[i+1] for i in range(0, len(t), 2)):
+                    return t  # Already in doubled form
+        # Check if multiple tokens, each a doubled letter (ee, uu)
+        elif len(tokens) >= 2:
+            if all(len(t.token_normalized) == 2 and
+                   t.token_normalized[0] == t.token_normalized[1]
+                   for t in tokens):
+                return ''.join(t.token_normalized for t in tokens)
+        return None
+
+    eval_spanish = get_spanish_plural_normalized(eval_tokens)
+    cand_spanish = get_spanish_plural_normalized(cand_tokens)
+
+    if eval_spanish and cand_spanish and eval_spanish == cand_spanish:
+        return True
 
     return False
 

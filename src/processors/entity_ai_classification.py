@@ -241,7 +241,10 @@ def compare_entities_with_ai(
                     {'entity_id': c.entity_id, 'classification': c.classification}
                     for c in result.classification_changes
                 ],
-                'reference_changes': result.reference_changes,
+                'reference_changes': [
+                    {'entity_id': r.entity_id, 'add_refs': r.add_refs, 'remove_refs': r.remove_refs}
+                    for r in (result.reference_changes or [])
+                ],
                 'confidence': confidence,
                 'reasoning': result.reasoning
             }, f'Confidence {confidence:.2f} < threshold {min_confidence:.2f}')
@@ -288,7 +291,10 @@ def compare_entities_with_ai(
                 {'entity_id': c.entity_id, 'classification': c.classification}
                 for c in result.classification_changes
             ],
-            'reference_changes': result.reference_changes,
+            'reference_changes': [
+                {'entity_id': r.entity_id, 'add_refs': r.add_refs, 'remove_refs': r.remove_refs}
+                for r in (result.reference_changes or [])
+            ],
             'confidence': confidence,
             'reasoning': result.reasoning,
             'applied': applied
@@ -341,28 +347,38 @@ def _apply_pairwise_changes(
             entity.classified_as = EntityClassification.AMBIGUOUS
         elif new_classification == 'not_an_entity':
             entity.classified_as = EntityClassification.NOT_AN_ENTITY
-            entity.canonical_refs = []  # Clear references for NOT_AN_ENTITY
+            entity.canonical_refs.clear()  # Clear references for NOT_AN_ENTITY
 
     # Apply reference changes
+    # Note: canonical_refs is a SQLAlchemy relationship, so we work with entity objects
     if result.reference_changes:
         for ref_change in result.reference_changes:
             entity = entities_by_id.get(ref_change.entity_id)
             if not entity:
                 continue
 
-            # Get current refs
-            current_refs = set(entity.canonical_refs or [])
+            # Get current ref IDs
+            current_ref_ids = set(e.id for e in entity.canonical_refs)
 
             # Add new refs
             if ref_change.add_refs:
-                current_refs.update(ref_change.add_refs)
+                for ref_id in ref_change.add_refs:
+                    if ref_id not in current_ref_ids:
+                        # Fetch the entity object to add
+                        ref_entity = entities_by_id.get(ref_id)
+                        if not ref_entity:
+                            ref_entity = session.query(NamedEntity).get(ref_id)
+                        if ref_entity:
+                            entity.canonical_refs.append(ref_entity)
+                            current_ref_ids.add(ref_id)
 
             # Remove refs
             if ref_change.remove_refs:
-                current_refs -= set(ref_change.remove_refs)
-
-            # Update entity
-            entity.canonical_refs = list(current_refs)
+                for ref_id in ref_change.remove_refs:
+                    if ref_id in current_ref_ids:
+                        ref_entity = next((e for e in entity.canonical_refs if e.id == ref_id), None)
+                        if ref_entity:
+                            entity.canonical_refs.remove(ref_entity)
 
     # Determine auto-approval based on confidence
     should_approve_a = False
@@ -395,7 +411,8 @@ def classify_entity_with_ai(
     lsh_matcher: Optional[EntityLSHMatcher] = None,
     min_confidence: float = 0.70,
     max_candidates: int = 10,
-    dry_run: bool = False
+    dry_run: bool = False,
+    compared_pairs: Optional[set] = None
 ) -> Tuple[str, Optional[Dict], Optional[str]]:
     """
     Classify an entity using LSH + pairwise AI comparison.
@@ -407,6 +424,7 @@ def classify_entity_with_ai(
         min_confidence: Minimum confidence to apply classification
         max_candidates: Maximum number of candidates to compare
         dry_run: If True, don't modify database
+        compared_pairs: Set of (id1, id2) tuples already compared (to avoid duplicates)
 
     Returns:
         Tuple of (status, result_dict, error_message)
@@ -444,12 +462,24 @@ def classify_entity_with_ai(
 
             return ('skipped_no_candidates', None, 'No candidates found via LSH')
 
+        # Sort candidates by name_length DESC (longer first)
+        candidates = sorted(candidates, key=lambda x: x[0].name_length, reverse=True)
+
         # Compare with each candidate (1v1)
         best_result = None
         best_confidence = 0.0
         best_candidate = None
 
         for candidate, similarity in candidates:
+            # Skip if this pair was already compared
+            pair_key = tuple(sorted([entity.id, candidate.id]))
+            if compared_pairs is not None and pair_key in compared_pairs:
+                continue
+
+            # Mark pair as compared
+            if compared_pairs is not None:
+                compared_pairs.add(pair_key)
+
             status, result, error = compare_entities_with_ai(
                 entity, candidate, session, similarity,
                 min_confidence, dry_run
@@ -463,6 +493,9 @@ def classify_entity_with_ai(
 
         # Return best result
         if best_result:
+            # Add candidate info for verbose output
+            best_result['entity_b_id'] = best_candidate.id
+            best_result['entity_b_name'] = best_candidate.name
             return ('success', best_result, None)
         else:
             # All comparisons had low confidence
@@ -484,7 +517,9 @@ def batch_classify_entities(
     limit: Optional[int] = None,
     min_confidence: float = 0.70,
     max_candidates: int = 10,
-    dry_run: bool = False
+    lsh_threshold: float = 0.3,
+    dry_run: bool = False,
+    on_result: Optional[callable] = None
 ) -> Dict[str, int]:
     """
     Classify multiple entities in batch using LSH + pairwise AI.
@@ -495,30 +530,38 @@ def batch_classify_entities(
         limit: Maximum number of entities to process
         min_confidence: Minimum confidence to apply classification
         max_candidates: Maximum candidates per entity
+        lsh_threshold: LSH similarity threshold for candidate discovery
         dry_run: If True, don't modify database
+        on_result: Optional callback(entity_a, entity_b, status, result, error) for verbose output
 
     Returns:
         Statistics dictionary with counts
     """
     # Query entities needing AI classification
+    # Order by name_length DESC (longer first) to compare long->short
     query = session.query(NamedEntity).filter(
         NamedEntity.last_review_type == 'algorithmic',
         NamedEntity.is_approved == 0
     ).order_by(
-        NamedEntity.article_count.desc(),
-        NamedEntity.name_length.asc()
+        NamedEntity.name_length.desc(),
+        NamedEntity.article_count.desc()
     )
 
     if entity_type:
-        query = query.filter(NamedEntity.entity_type == entity_type)
+        from db.models import EntityType
+        type_enum = EntityType[entity_type.upper()]
+        query = query.filter(NamedEntity.entity_type == type_enum)
 
     if limit:
         query = query.limit(limit)
 
     entities = query.all()
 
+    # Track compared pairs to avoid duplicate API calls (A vs B = B vs A)
+    compared_pairs = set()
+
     # Build LSH index once for efficiency
-    # Group entities by type
+    # Group entities by type, maintaining order (longer first)
     entities_by_type = {}
     for entity in entities:
         type_val = entity.entity_type.value
@@ -541,13 +584,13 @@ def batch_classify_entities(
     for type_val, type_entities in entities_by_type.items():
         # Build LSH index for this type
         lsh_matcher = build_lsh_index_for_type(
-            session, type_val, threshold=0.4, only_canonical=True
+            session, type_val, threshold=lsh_threshold, only_canonical=True
         )
 
         for entity in type_entities:
             status, result, error = classify_entity_with_ai(
                 entity, session, lsh_matcher, min_confidence,
-                max_candidates, dry_run
+                max_candidates, dry_run, compared_pairs
             )
 
             stats['processed'] += 1
@@ -569,5 +612,17 @@ def batch_classify_entities(
                 stats['skipped_no_candidates'] += 1
             elif status == 'error':
                 stats['errors'] += 1
+
+            # Call verbose callback if provided
+            if on_result:
+                # Create a simple entity_b object for callback
+                entity_b = None
+                if result and result.get('entity_b_id'):
+                    class EntityInfo:
+                        def __init__(self, id, name):
+                            self.id = id
+                            self.name = name
+                    entity_b = EntityInfo(result['entity_b_id'], result['entity_b_name'])
+                on_result(entity, entity_b, status, result, error)
 
     return stats

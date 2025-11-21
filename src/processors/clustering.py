@@ -4,7 +4,14 @@ Adapted for Spanish news articles with separate title embedding.
 """
 
 import re
+import warnings
 import numpy as np
+
+# Suppress noisy warnings from dependencies
+warnings.filterwarnings('ignore', message='n_jobs value .* overridden to 1 by setting random_state')
+warnings.filterwarnings('ignore', message='k >= N for N .* square matrix')
+warnings.filterwarnings('ignore', message="'force_all_finite' was renamed")
+
 from sentence_transformers import SentenceTransformer
 from sklearn.preprocessing import normalize
 import umap
@@ -122,15 +129,45 @@ def cluster_article(sentences, title_embedding):
     if N == 0:
         return [], np.array([]), np.array([])
 
+    # UMAP needs at least 4 samples to work reliably
+    if N < 4:
+        # For very short articles, put all sentences in one cluster
+        labels = np.zeros(N, dtype=int)
+        probs = np.ones(N, dtype=float)
+        embs = make_embeddings(sentences)
+        article_emb = np.mean(embs, axis=0, keepdims=True)
+        title_sim = float(cosine_similarity(article_emb, title_embedding)[0, 0]) if title_embedding is not None else 0.5
+        cluster_info = {
+            'cluster_id': 0,
+            'sentence_indices': list(range(N)),
+            'score': title_sim,
+            'size': N
+        }
+        return [cluster_info], labels, probs
+
     positions = list(range(N))
     embs = make_embeddings(sentences)
     embs_pos = add_position_feature(embs, positions)
 
     # UMAP dimensionality reduction
-    n_components = 16 if N >= 40 else 8
-    reducer = umap.UMAP(n_neighbors=min(15, N-1), n_components=min(n_components, N-1),
-                       metric='cosine', random_state=42)
-    X_reduced = reducer.fit_transform(embs_pos)
+    n_neighbors = min(15, N - 1)
+    n_components = min(16 if N >= 40 else 8, N - 1)
+    # Ensure n_components doesn't exceed what UMAP can handle
+    n_components = max(2, min(n_components, n_neighbors))
+
+    try:
+        reducer = umap.UMAP(n_neighbors=n_neighbors, n_components=n_components,
+                           metric='cosine', random_state=42)
+        X_reduced = reducer.fit_transform(embs_pos)
+    except Exception:
+        # Fallback: skip UMAP, use raw embeddings with PCA
+        from sklearn.decomposition import PCA
+        n_pca = min(n_components, N - 1, embs_pos.shape[1])
+        if n_pca >= 2:
+            pca = PCA(n_components=n_pca)
+            X_reduced = pca.fit_transform(embs_pos)
+        else:
+            X_reduced = embs_pos
 
     # HDBSCAN params
     min_cluster_size = max(2, int(0.05 * N))

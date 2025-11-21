@@ -176,7 +176,7 @@ def tokenize_entity_name(name: str) -> list[dict]:
         result.append(token_data)
 
     # Third pass: determine seems_like_initials
-    # Criteria:
+    # Criteria for single token:
     # 1. Token is all uppercase
     # 2. Entity has exactly one non-stopword token
     # 3. Token (without periods) equals entity name (without periods)
