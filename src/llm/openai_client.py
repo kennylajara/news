@@ -102,7 +102,12 @@ def _render_prompts(task_name: str, data: Dict[str, Any]) -> tuple[str, str]:
     return system_prompt, user_prompt
 
 
-def openai_structured_output(task_name: str, data: Dict[str, Any], model: str = None) -> BaseModel:
+def openai_structured_output(
+    task_name: str,
+    data: Dict[str, Any],
+    model: str = None,
+    validation_context: Dict[str, Any] = None
+) -> BaseModel:
     """
     Generic wrapper for OpenAI structured outputs.
 
@@ -118,6 +123,7 @@ def openai_structured_output(task_name: str, data: Dict[str, Any], model: str = 
         task_name: Name of the task (e.g., 'core_cluster_summarization')
         data: Dictionary with variables for template rendering
         model: OpenAI model to use (defaults to OPENAI_MODEL from settings)
+        validation_context: Optional context for Pydantic validators (e.g., valid entity IDs)
 
     Returns:
         Pydantic model instance with parsed structured output
@@ -131,6 +137,13 @@ def openai_structured_output(task_name: str, data: Dict[str, Any], model: str = 
         >>> data = {'title': 'Article Title', 'cluster_sentences': ['...'], 'cluster_score': 0.85}
         >>> result = openai_structured_output('core_cluster_summarization', data)
         >>> print(result.summary)
+
+        >>> # With validation context
+        >>> result = openai_structured_output(
+        ...     'entity_pairwise_classification',
+        ...     data,
+        ...     validation_context={'valid_entity_ids': [123, 456]}
+        ... )
     """
     # Load schema and templates
     schema_class = _load_pydantic_schema(task_name)
@@ -149,10 +162,18 @@ def openai_structured_output(task_name: str, data: Dict[str, Any], model: str = 
         response_format=schema_class
     )
 
-    # Parse and return the structured output
+    # Parse the structured output
     parsed = completion.choices[0].message.parsed
 
     if parsed is None:
         raise ValueError("OpenAI API returned None for parsed output")
+
+    # If validation context provided, validate with context
+    if validation_context:
+        # Re-validate with context (Pydantic validators will use info.context)
+        parsed = schema_class.model_validate(
+            parsed.model_dump(),
+            context=validation_context
+        )
 
     return parsed

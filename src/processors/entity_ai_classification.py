@@ -3,7 +3,7 @@ AI-assisted entity classification using LLM with pairwise comparison.
 
 This module uses LSH (Locality Sensitive Hashing) for efficient candidate
 discovery and performs 1v1 entity comparisons where the LLM can recommend
-actions for BOTH entities, eliminating order bias.
+classification changes and reference modifications for BOTH entities.
 """
 
 from typing import Dict, List, Tuple, Optional, Any
@@ -17,6 +17,34 @@ from db.models import (
 )
 from processors.entity_lsh_matcher import EntityLSHMatcher, build_lsh_index_for_type
 from llm.openai_client import openai_structured_output
+
+
+def _get_canonical_refs_info(entity: NamedEntity, session: Session) -> List[Dict[str, Any]]:
+    """
+    Get information about canonical references for an entity.
+
+    Args:
+        entity: Entity to get references for
+        session: SQLAlchemy session
+
+    Returns:
+        List of dicts with {id, name, type} for each canonical reference
+    """
+    if not entity.canonical_refs:
+        return []
+
+    canonical_entities = session.query(NamedEntity).filter(
+        NamedEntity.id.in_(entity.canonical_refs)
+    ).all()
+
+    return [
+        {
+            'id': ce.id,
+            'name': ce.name,
+            'type': ce.entity_type.value
+        }
+        for ce in canonical_entities
+    ]
 
 
 def extract_pairwise_context(
@@ -37,7 +65,7 @@ def extract_pairwise_context(
         max_sentences: Maximum context sentences per entity
 
     Returns:
-        Dictionary with context data for both entities
+        Dictionary with context data for both entities including IDs and canonical_refs
     """
     # Helper function to extract entity context
     def get_entity_data(entity):
@@ -70,6 +98,10 @@ def extract_pairwise_context(
     # Get data for both entities
     data_a = get_entity_data(entity_a)
     data_b = get_entity_data(entity_b)
+
+    # Get canonical references info
+    refs_a = _get_canonical_refs_info(entity_a, session)
+    refs_b = _get_canonical_refs_info(entity_b, session)
 
     # Calculate shared articles
     article_ids_a = session.execute(
@@ -108,20 +140,24 @@ def extract_pairwise_context(
 
     return {
         # Entity A data
+        'entity_a_id': entity_a.id,
         'entity_a_name': entity_a.name,
         'entity_a_type': entity_a.entity_type.value,
         'entity_a_classification': entity_a.classified_as.value,
         'entity_a_mentions': data_a['mentions'],
         'entity_a_article_count': data_a['article_count'],
         'entity_a_context': data_a['context'],
+        'entity_a_canonical_refs': refs_a,
 
         # Entity B data
+        'entity_b_id': entity_b.id,
         'entity_b_name': entity_b.name,
         'entity_b_type': entity_b.entity_type.value,
         'entity_b_classification': entity_b.classified_as.value,
         'entity_b_mentions': data_b['mentions'],
         'entity_b_article_count': data_b['article_count'],
         'entity_b_context': data_b['context'],
+        'entity_b_canonical_refs': refs_b,
 
         # Comparison data
         'shared_articles': shared_articles,
@@ -158,8 +194,12 @@ def compare_entities_with_ai(
             entity_a, entity_b, session, jaccard_similarity
         )
 
-        # Step 2: Call LLM for pairwise comparison
-        result = openai_structured_output('entity_pairwise_classification', context)
+        # Step 2: Call LLM for pairwise comparison with validation context
+        result = openai_structured_output(
+            'entity_pairwise_classification',
+            context,
+            validation_context={'valid_entity_ids': [entity_a.id, entity_b.id]}
+        )
 
         # Step 3: Validate confidence
         confidence = result.confidence
@@ -167,53 +207,88 @@ def compare_entities_with_ai(
         if confidence < min_confidence:
             # Save as suggestion but don't apply
             if not dry_run:
+                # Create summary of changes for suggestion
+                changes_summary = {
+                    'classification_changes': [
+                        {'entity_id': c.entity_id, 'classification': c.classification}
+                        for c in result.classification_changes
+                    ],
+                    'reference_changes': [
+                        {
+                            'entity_id': r.entity_id,
+                            'add_refs': r.add_refs,
+                            'remove_refs': r.remove_refs
+                        }
+                        for r in (result.reference_changes or [])
+                    ] if result.reference_changes else None
+                }
+
                 suggestion = EntityClassificationSuggestion(
                     entity_id=entity_a.id,
-                    suggested_classification=f"pairwise:{result.relationship}",
+                    suggested_classification=f"pairwise:{changes_summary}",
                     suggested_canonical_ids=[entity_b.id],
                     confidence=confidence,
                     reasoning=f"vs {entity_b.name}: {result.reasoning}",
-                    alternative_classification=result.alternative_relationship,
-                    alternative_confidence=result.alternative_confidence,
+                    alternative_classification=None,
+                    alternative_confidence=None,
                     applied=0
                 )
                 session.add(suggestion)
                 session.commit()
 
             return ('skipped_low_confidence', {
-                'relationship': result.relationship,
-                'entity_a_action': result.entity_a_action,
-                'entity_b_action': result.entity_b_action,
+                'classification_changes': [
+                    {'entity_id': c.entity_id, 'classification': c.classification}
+                    for c in result.classification_changes
+                ],
+                'reference_changes': result.reference_changes,
                 'confidence': confidence,
                 'reasoning': result.reasoning
             }, f'Confidence {confidence:.2f} < threshold {min_confidence:.2f}')
 
-        # Step 4: Apply actions for both entities
+        # Step 4: Apply classification and reference changes
         applied = False
         if not dry_run:
-            applied = _apply_pairwise_actions(
+            applied = _apply_pairwise_changes(
                 entity_a, entity_b, result, session
             )
 
         # Step 5: Save suggestion
         if not dry_run:
+            changes_summary = {
+                'classification_changes': [
+                    {'entity_id': c.entity_id, 'classification': c.classification}
+                    for c in result.classification_changes
+                ],
+                'reference_changes': [
+                    {
+                        'entity_id': r.entity_id,
+                        'add_refs': r.add_refs,
+                        'remove_refs': r.remove_refs
+                    }
+                    for r in (result.reference_changes or [])
+                ] if result.reference_changes else None
+            }
+
             suggestion = EntityClassificationSuggestion(
                 entity_id=entity_a.id,
-                suggested_classification=f"pairwise:{result.relationship}",
+                suggested_classification=f"pairwise:{changes_summary}",
                 suggested_canonical_ids=[entity_b.id],
                 confidence=confidence,
                 reasoning=f"vs {entity_b.name}: {result.reasoning}",
-                alternative_classification=result.alternative_relationship,
-                alternative_confidence=result.alternative_confidence,
+                alternative_classification=None,
+                alternative_confidence=None,
                 applied=1 if applied else 0
             )
             session.add(suggestion)
             session.commit()
 
         return ('success', {
-            'relationship': result.relationship,
-            'entity_a_action': result.entity_a_action,
-            'entity_b_action': result.entity_b_action,
+            'classification_changes': [
+                {'entity_id': c.entity_id, 'classification': c.classification}
+                for c in result.classification_changes
+            ],
+            'reference_changes': result.reference_changes,
             'confidence': confidence,
             'reasoning': result.reasoning,
             'applied': applied
@@ -223,14 +298,14 @@ def compare_entities_with_ai(
         return ('error', None, str(e))
 
 
-def _apply_pairwise_actions(
+def _apply_pairwise_changes(
     entity_a: NamedEntity,
     entity_b: NamedEntity,
     result,  # StructuredOutput from LLM
     session: Session
 ) -> bool:
     """
-    Apply LLM's recommended actions for both entities.
+    Apply LLM's recommended classification and reference changes for both entities.
 
     Args:
         entity_a: First entity
@@ -239,64 +314,68 @@ def _apply_pairwise_actions(
         session: SQLAlchemy session
 
     Returns:
-        True if actions were applied, False otherwise
+        True if changes were applied, False otherwise
     """
     confidence = result.confidence
-    relationship = result.relationship
-    action_a = result.entity_a_action
-    action_b = result.entity_b_action
 
-    # Determine auto-approval thresholds based on relationship
+    # Build entity lookup
+    entities_by_id = {
+        entity_a.id: entity_a,
+        entity_b.id: entity_b
+    }
+
+    # Apply classification changes
+    for change in result.classification_changes:
+        entity = entities_by_id.get(change.entity_id)
+        if not entity:
+            return False
+
+        new_classification = change.classification
+
+        # Update classification
+        if new_classification == 'canonical':
+            entity.classified_as = EntityClassification.CANONICAL
+        elif new_classification == 'alias':
+            entity.classified_as = EntityClassification.ALIAS
+        elif new_classification == 'ambiguous':
+            entity.classified_as = EntityClassification.AMBIGUOUS
+        elif new_classification == 'not_an_entity':
+            entity.classified_as = EntityClassification.NOT_AN_ENTITY
+            entity.canonical_refs = []  # Clear references for NOT_AN_ENTITY
+
+    # Apply reference changes
+    if result.reference_changes:
+        for ref_change in result.reference_changes:
+            entity = entities_by_id.get(ref_change.entity_id)
+            if not entity:
+                continue
+
+            # Get current refs
+            current_refs = set(entity.canonical_refs or [])
+
+            # Add new refs
+            if ref_change.add_refs:
+                current_refs.update(ref_change.add_refs)
+
+            # Remove refs
+            if ref_change.remove_refs:
+                current_refs -= set(ref_change.remove_refs)
+
+            # Update entity
+            entity.canonical_refs = list(current_refs)
+
+    # Determine auto-approval based on confidence
     should_approve_a = False
     should_approve_b = False
 
-    if relationship == 'same_entity':
-        # High confidence for same entity relationships
-        if confidence >= 0.90:
-            should_approve_a = True
-            should_approve_b = True
-    elif relationship == 'different_entities':
-        # Medium confidence needed for different entities
-        if confidence >= 0.80:
-            should_approve_a = True
-            should_approve_b = True
-    elif relationship == 'ambiguous_usage':
-        # Lower threshold for ambiguous (more conservative)
-        if confidence >= 0.85:
-            should_approve_a = True
-            should_approve_b = True
-
-    # Apply action for entity_a
-    if action_a == 'make_alias':
-        # Make entity_a an alias of entity_b
-        if entity_b.classified_as == EntityClassification.CANONICAL:
-            entity_a.set_as_alias(entity_b, session)
-        else:
-            return False  # Can't make alias of non-canonical
-
-    elif action_a == 'make_canonical':
-        entity_a.classified_as = EntityClassification.CANONICAL
-        entity_a.canonical_refs = []
-
-    elif action_a == 'make_not_an_entity':
-        entity_a.classified_as = EntityClassification.NOT_AN_ENTITY
-        entity_a.canonical_refs = []
-
-    # Apply action for entity_b
-    if action_b == 'make_alias':
-        # Make entity_b an alias of entity_a
-        if entity_a.classified_as == EntityClassification.CANONICAL:
-            entity_b.set_as_alias(entity_a, session)
-        else:
-            return False  # Can't make alias of non-canonical
-
-    elif action_b == 'make_canonical':
-        entity_b.classified_as = EntityClassification.CANONICAL
-        entity_b.canonical_refs = []
-
-    elif action_b == 'make_not_an_entity':
-        entity_b.classified_as = EntityClassification.NOT_AN_ENTITY
-        entity_b.canonical_refs = []
+    if confidence >= 0.90:
+        should_approve_a = True
+        should_approve_b = True
+    elif confidence >= 0.80:
+        # Medium confidence: approve if classifications didn't change significantly
+        # (e.g., CANONICAL → CANONICAL, or simple ALIAS assignments)
+        should_approve_a = True
+        should_approve_b = True
 
     # Mark both as reviewed by AI
     entity_a.last_review_type = 'ai-assisted'
