@@ -15,28 +15,17 @@ class ProcessType(enum.Enum):
     """Types of domain processing."""
     ENRICH_ARTICLE = "enrich_article"
     GENERATE_FLASH_NEWS = "generate_flash_news"
+    ANALYZE_ARTICLE = "analyze_article"
 
 
 class EntityType(enum.Enum):
-    """Types of named entities (based on spaCy NER labels)."""
-    PERSON = "person"              # People, including fictional
-    NORP = "norp"                  # Nationalities or religious or political groups
-    FAC = "fac"                    # Buildings, airports, highways, bridges, etc.
-    ORG = "org"                    # Companies, agencies, institutions, etc.
-    GPE = "gpe"                    # Countries, cities, states
-    LOC = "loc"                    # Non-GPE locations, mountain ranges, bodies of water
-    PRODUCT = "product"            # Objects, vehicles, foods, etc. (Not services)
-    EVENT = "event"                # Named hurricanes, battles, wars, sports events, etc.
-    WORK_OF_ART = "work_of_art"    # Titles of books, songs, etc.
-    LAW = "law"                    # Named documents made into laws
-    LANGUAGE = "language"          # Any named language
-    DATE = "date"                  # Absolute or relative dates or periods
-    TIME = "time"                  # Times smaller than a day
-    PERCENT = "percent"            # Percentage, including "%"
-    MONEY = "money"                # Monetary values, including unit
-    QUANTITY = "quantity"          # Measurements, as of weight or distance
-    ORDINAL = "ordinal"            # "first", "second", etc.
-    CARDINAL = "cardinal"          # Numerals that do not fall under another type
+    """Types of named entities for recommendation systems."""
+    PERSON = "PERSON"       # Specific individuals users follow (Nicolás Maduro, Donald Trump)
+    ORG = "ORG"             # Organizations, companies, institutions (PSUV, Apple, Gobierno de Venezuela)
+    GPE = "GPE"             # Geographic locations for filtering (Venezuela, Caracas, Estados Unidos)
+    EVENT = "EVENT"         # Named events for grouping coverage (Elecciones 2024, Copa Mundial)
+    PRODUCT = "PRODUCT"     # Specific products/services (iPhone 16, ChatGPT, Tesla Model 3)
+    NORP = "NORP"           # Political/religious/ethnic groups (chavistas, republicanos, evangélicos)
 
 
 class ClusterCategory(enum.Enum):
@@ -56,7 +45,7 @@ class EntityClassification(enum.Enum):
 
 class EntityOrigin(enum.Enum):
     """Origin of entity in article-entity relationship."""
-    NER = "ner"                    # Detected by Named Entity Recognition
+    AI_ANALYSIS = "ai_analysis"    # Extracted by OpenAI during article analysis
     CLASSIFICATION = "classification"  # Added by entity classification (ALIAS/AMBIGUOUS)
 
 # Association table for many-to-many relationship between articles and tags
@@ -77,7 +66,7 @@ article_entities = Table(
     Column('entity_id', Integer, ForeignKey('named_entities.id', ondelete='CASCADE'), primary_key=True),
     Column('mentions', Integer, nullable=False, default=1),      # Number of mentions in this article
     Column('relevance', Float, nullable=False, default=0.0),     # Calculated relevance score for this article-entity pair
-    Column('origin', Enum(EntityOrigin), nullable=False, default=EntityOrigin.NER), # Origin: NER (detected) or CLASSIFICATION (added)
+    Column('origin', Enum(EntityOrigin), nullable=False, default=EntityOrigin.AI_ANALYSIS), # Origin: AI_ANALYSIS (extracted) or CLASSIFICATION (added)
     Column('context_sentences', JSON, nullable=True),            # List of sentences where entity was found (for manual review)
     Index('idx_article_entities_article_origin', 'article_id', 'origin'),  # Composite index for recalculation queries
     Index('idx_article_entities_entity', 'entity_id'),
@@ -1073,6 +1062,73 @@ class FlashNews(Base):
 
     def __repr__(self):
         return f"<FlashNews(id={self.id}, cluster_id={self.cluster_id}, published={bool(self.published)}, summary='{self.summary[:50]}...')>"
+
+
+class ArticleAnalysis(Base):
+    """Deep analysis of article for recommendation system matching."""
+    __tablename__ = 'article_analyses'
+
+    id = Column(Integer, primary_key=True)
+    article_id = Column(Integer, ForeignKey('articles.id', ondelete='CASCADE'), nullable=False, unique=True, index=True)
+
+    # Semantic analysis (stored as JSON)
+    key_concepts = Column(JSON, nullable=False)  # List of strings
+    semantic_relations = Column(JSON, nullable=False)  # List of {subject, predicate, object}
+
+    # Narrative and tone
+    narrative_frames = Column(JSON, nullable=False)  # List of frame enums
+    editorial_tone = Column(String(50), nullable=False)
+    style_descriptors = Column(JSON, nullable=False)  # List of strings
+
+    # Controversy and bias
+    controversy_score = Column(Integer, nullable=False)  # 0-100
+    political_bias = Column(Integer, nullable=False)  # -100 to 100
+
+    # Quality indicators
+    has_named_sources = Column(Integer, nullable=False, default=0)  # 0=no, 1=yes
+    has_data_or_statistics = Column(Integer, nullable=False, default=0)
+    has_multiple_perspectives = Column(Integer, nullable=False, default=0)
+    quality_score = Column(Integer, nullable=False)  # 0-100
+
+    # Content format and temporal relevance
+    content_format = Column(String(50), nullable=False)  # news, feature, opinion, analysis, interview, listicle
+    temporal_relevance = Column(String(50), nullable=False)  # breaking, timely, evergreen
+
+    # Audience targeting
+    audience_education = Column(String(50), nullable=False)
+    target_age_range = Column(String(50), nullable=False)
+    target_professions = Column(JSON, nullable=False)  # List of strings
+    required_interests = Column(JSON, nullable=False)  # List of strings
+
+    # Industry/sector
+    relevant_industries = Column(JSON, nullable=False)  # List of strings
+
+    # Geographic/cultural context
+    geographic_scope = Column(String(50), nullable=False)
+    cultural_context = Column(String(100), nullable=False)
+
+    # Source diversity
+    voices_represented = Column(JSON, nullable=False)  # List of {type, stance}
+    source_diversity_score = Column(Integer, nullable=False)  # 0-100
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
+
+    # Relationships
+    article = relationship('Article', backref='analysis')
+
+    # Indexes for common queries
+    __table_args__ = (
+        Index('idx_article_analysis_controversy', 'controversy_score'),
+        Index('idx_article_analysis_quality', 'quality_score'),
+        Index('idx_article_analysis_bias', 'political_bias'),
+        Index('idx_article_analysis_content_format', 'content_format'),
+        Index('idx_article_analysis_temporal', 'temporal_relevance'),
+        Index('idx_article_analysis_education', 'audience_education'),
+    )
+
+    def __repr__(self):
+        return f"<ArticleAnalysis(article_id={self.article_id}, quality={self.quality_score}, controversy={self.controversy_score})>"
 
 
 class EntityClassificationSuggestion(Base):

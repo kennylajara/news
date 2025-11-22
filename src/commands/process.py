@@ -13,66 +13,102 @@ def process():
 
 
 @process.command()
-@click.option('--domain', '-d', required=True, help='Domain to process')
-@click.option('--type', '-t', 'process_type', type=click.Choice(['enrich_article', 'generate_flash_news']), required=True, help='Type of processing')
+@click.option('--domain', '-d', help='Domain to process')
+@click.option('--type', '-t', 'process_type', type=click.Choice(['enrich_article', 'generate_flash_news', 'analyze_article']), required=True, help='Type of processing')
 @click.option('--size', '-s', type=int, default=10, help='Batch size (default: 10)')
-def start(domain, process_type, size):
+@click.option('--article-id', '-a', type=int, help='Process a specific article by ID')
+def start(domain, process_type, size, article_id):
     """
-    Create and start a processing batch for articles from a domain.
+    Create and start a processing batch for articles from a domain or a specific article.
 
     Examples:
         news process start -d diariolibre.com -t enrich_article -s 10
         news process start -d diariolibre.com -t generate_flash_news -s 10
+        news process start -a 123 -t generate_flash_news
     """
     db = Database()
     session = db.get_session()
 
     try:
-        # Get source
-        source = session.query(Source).filter_by(domain=domain).first()
-        if not source:
-            click.echo(click.style(f"✗ Domain '{domain}' not found", fg="red"))
+        # Handle specific article processing
+        if article_id:
+            article = session.query(Article).filter_by(id=article_id).first()
+            if not article:
+                click.echo(click.style(f"✗ Article ID {article_id} not found", fg="red"))
+                return
+            source = article.source
+            articles_to_process = [article]
+            articles_label = f"article #{article_id}"
+        elif domain:
+            # Get source
+            source = session.query(Source).filter_by(domain=domain).first()
+            if not source:
+                click.echo(click.style(f"✗ Domain '{domain}' not found", fg="red"))
+                return
+        else:
+            click.echo(click.style("✗ Either --domain or --article-id is required", fg="red"))
             return
 
         # Map process type string to enum and select appropriate articles
         if process_type == 'enrich_article':
             process_type_enum = ProcessType.ENRICH_ARTICLE
 
-            # Get unenriched articles (enriched_at is NULL)
-            articles_to_process = (
-                session.query(Article)
-                .filter(Article.source_id == source.id)
-                .filter(Article.enriched_at.is_(None))
-                .order_by(Article.created_at.desc())
-                .limit(size)
-                .all()
-            )
-            articles_label = "unenriched articles"
+            if not article_id:
+                # Get unenriched articles (enriched_at is NULL)
+                articles_to_process = (
+                    session.query(Article)
+                    .filter(Article.source_id == source.id)
+                    .filter(Article.enriched_at.is_(None))
+                    .order_by(Article.created_at.desc())
+                    .limit(size)
+                    .all()
+                )
+                articles_label = "unenriched articles"
 
         elif process_type == 'generate_flash_news':
             process_type_enum = ProcessType.GENERATE_FLASH_NEWS
 
-            # Get articles with clusters (cluster_enriched_at is NOT NULL)
-            articles_to_process = (
-                session.query(Article)
-                .filter(Article.source_id == source.id)
-                .filter(Article.cluster_enriched_at.isnot(None))
-                .order_by(Article.created_at.desc())
-                .limit(size)
-                .all()
-            )
-            articles_label = "articles with clusters"
+            if not article_id:
+                # Get articles with clusters (cluster_enriched_at is NOT NULL)
+                articles_to_process = (
+                    session.query(Article)
+                    .filter(Article.source_id == source.id)
+                    .filter(Article.cluster_enriched_at.isnot(None))
+                    .order_by(Article.created_at.desc())
+                    .limit(size)
+                    .all()
+                )
+                articles_label = "articles with clusters"
+
+        elif process_type == 'analyze_article':
+            process_type_enum = ProcessType.ANALYZE_ARTICLE
+            from db import ArticleAnalysis
+
+            if not article_id:
+                # Get enriched articles without analysis
+                articles_to_process = (
+                    session.query(Article)
+                    .filter(Article.source_id == source.id)
+                    .filter(Article.enriched_at.isnot(None))
+                    .outerjoin(ArticleAnalysis, Article.id == ArticleAnalysis.article_id)
+                    .filter(ArticleAnalysis.id.is_(None))
+                    .order_by(Article.created_at.desc())
+                    .limit(size)
+                    .all()
+                )
+                articles_label = "enriched articles without analysis"
 
         else:
             click.echo(click.style(f"✗ Unknown process type: {process_type}", fg="red"))
             return
 
         if not articles_to_process:
-            click.echo(click.style(f"✗ No {articles_label} found for {domain}", fg="yellow"))
+            location = f"article #{article_id}" if article_id else domain
+            click.echo(click.style(f"✗ No {articles_label} found for {location}", fg="yellow"))
             return
 
         click.echo(f"Found {len(articles_to_process)} {articles_label}")
-        click.echo(f"Creating batch for {domain}...")
+        click.echo(f"Creating batch for {source.domain}...")
 
         # Create batch and items atomically
         try:
@@ -118,6 +154,9 @@ def start(domain, process_type, size):
         elif process_type_enum == ProcessType.GENERATE_FLASH_NEWS:
             from processors.flash_news import process_flash_news_batch
             success = process_flash_news_batch(batch.id, session)
+        elif process_type_enum == ProcessType.ANALYZE_ARTICLE:
+            from processors.article_analysis import process_article_analysis_batch
+            success = process_article_analysis_batch(batch.id, session)
         else:
             click.echo(click.style(f"✗ No processor found for type: {process_type}", fg="red"))
             return

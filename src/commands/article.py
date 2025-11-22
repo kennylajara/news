@@ -325,7 +325,9 @@ def list(limit, source, tag, enriched, pending_enrich, no_pager):
 @click.option('--full', '-f', is_flag=True, help='Show full article content')
 @click.option('--entities', '-e', is_flag=True, help='Show extracted entities (NER)')
 @click.option('--clusters', '-c', is_flag=True, help='Show sentence clusters')
-def show(article_id, full, entities, clusters):
+@click.option('--analysis', '-a', is_flag=True, help='Show deep analysis for recommendations')
+@click.option('--flash', is_flag=True, help='Show flash news summaries')
+def show(article_id, full, entities, clusters, analysis, flash):
     """
     Show article details by ID.
 
@@ -440,6 +442,74 @@ def show(article_id, full, entities, clusters):
                                 preview = sent.sentence_text[:80] + "..." if len(sent.sentence_text) > 80 else sent.sentence_text
                                 click.echo(f"      [{sent.sentence_index}] {preview}")
                         click.echo()
+
+        # Show analysis if requested
+        if analysis:
+            from db import ArticleAnalysis
+
+            click.echo(f"\n{click.style('Deep Analysis:', bold=True)}")
+
+            art_analysis = session.query(ArticleAnalysis).filter_by(article_id=article_id).first()
+
+            if not art_analysis:
+                click.echo(click.style("  Article has not been analyzed yet", fg="yellow"))
+                click.echo(click.style("  Run: news process start -d <domain> -t analyze_article", fg="yellow"))
+            else:
+                # Semantic
+                click.echo(f"\n  {click.style('Semantic:', fg='cyan')}")
+                click.echo(f"    Key concepts: {', '.join(art_analysis.key_concepts)}")
+
+                # Narrative
+                click.echo(f"\n  {click.style('Narrative:', fg='cyan')}")
+                click.echo(f"    Frames: {', '.join(art_analysis.narrative_frames)}")
+                click.echo(f"    Tone: {art_analysis.editorial_tone}")
+                click.echo(f"    Format: {art_analysis.content_format}")
+                click.echo(f"    Temporal relevance: {art_analysis.temporal_relevance}")
+
+                # Scores
+                click.echo(f"\n  {click.style('Scores:', fg='cyan')}")
+
+                # Controversy with color coding
+                controversy_color = 'green' if art_analysis.controversy_score < 40 else ('yellow' if art_analysis.controversy_score < 70 else 'red')
+                click.echo(f"    Controversy: {click.style(str(art_analysis.controversy_score), fg=controversy_color)}/100")
+
+                # Political bias with color coding
+                bias = art_analysis.political_bias
+                bias_label = "neutral" if -20 <= bias <= 20 else ("left" if bias < -20 else "right")
+                bias_color = 'white' if -20 <= bias <= 20 else ('blue' if bias < -20 else 'red')
+                click.echo(f"    Political bias: {click.style(f'{bias} ({bias_label})', fg=bias_color)}")
+
+                # Audience
+                click.echo(f"\n  {click.style('Target audience:', fg='cyan')}")
+                click.echo(f"    Education level: {art_analysis.audience_education}")
+                click.echo(f"    Age range: {art_analysis.target_age_range}")
+
+                # Context
+                click.echo(f"\n  {click.style('Context:', fg='cyan')}")
+                click.echo(f"    Geographic scope: {art_analysis.geographic_scope}")
+                if art_analysis.relevant_industries:
+                    click.echo(f"    Industries: {', '.join(art_analysis.relevant_industries)}")
+
+        # Show flash news if requested
+        if flash:
+            from db import FlashNews, ArticleCluster
+
+            click.echo(f"\n{click.style('Flash News:', bold=True)}")
+
+            # Get flash news through clusters
+            flash_items = (
+                session.query(FlashNews)
+                .join(ArticleCluster)
+                .filter(ArticleCluster.article_id == article_id)
+                .all()
+            )
+
+            if not flash_items:
+                click.echo(click.style("  No flash news generated yet", fg="yellow"))
+                click.echo(click.style("  Run: news process start -a <id> -t generate_flash_news", fg="yellow"))
+            else:
+                for fn in flash_items:
+                    click.echo(f"\n  {click.style(fn.summary, fg='green')}")
 
         click.echo(f"\nContent ({len(art.content)} chars):")
         click.echo("-" * 80)

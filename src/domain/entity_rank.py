@@ -27,14 +27,10 @@ class EntityRankCalculator:
     RANKED_TYPES = {
         EntityType.PERSON,
         EntityType.ORG,
-        EntityType.FAC,
         EntityType.GPE,
-        EntityType.LOC,
         EntityType.EVENT,
-        EntityType.WORK_OF_ART,
-        EntityType.LAW,
-        EntityType.LANGUAGE,
-        EntityType.DATE
+        EntityType.PRODUCT,
+        EntityType.NORP
     }
 
     def __init__(

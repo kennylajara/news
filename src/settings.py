@@ -51,7 +51,7 @@ def get_setting(key: str, default=None):
 OPENAI_API_KEY = get_setting('OPENAI_API_KEY')
 OPENAI_MODEL = get_setting('OPENAI_MODEL', 'gpt-5-nano')
 OPENAI_MAX_RETRIES = int(get_setting('OPENAI_MAX_RETRIES', '3'))
-OPENAI_TIMEOUT = int(get_setting('OPENAI_TIMEOUT', '30'))
+OPENAI_TIMEOUT = int(get_setting('OPENAI_TIMEOUT', '120'))
 
 # Debug mode
 DEBUG = get_setting('DEBUG', 'False').lower() in ('true', '1', 'yes')

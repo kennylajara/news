@@ -26,28 +26,6 @@ except OSError:
     nlp = None
 
 
-# Map spaCy entity labels to our EntityType enum
-SPACY_TO_ENTITY_TYPE = {
-    'PER': EntityType.PERSON,
-    'PERSON': EntityType.PERSON,
-    'NORP': EntityType.NORP,
-    'FAC': EntityType.FAC,
-    'ORG': EntityType.ORG,
-    'GPE': EntityType.GPE,
-    'LOC': EntityType.LOC,
-    'PRODUCT': EntityType.PRODUCT,
-    'EVENT': EntityType.EVENT,
-    'WORK_OF_ART': EntityType.WORK_OF_ART,
-    'LAW': EntityType.LAW,
-    'LANGUAGE': EntityType.LANGUAGE,
-    'DATE': EntityType.DATE,
-    'TIME': EntityType.TIME,
-    'PERCENT': EntityType.PERCENT,
-    'MONEY': EntityType.MONEY,
-    'QUANTITY': EntityType.QUANTITY,
-    'ORDINAL': EntityType.ORDINAL,
-    'CARDINAL': EntityType.CARDINAL,
-}
 
 
 def calculate_entity_relevance(article, entity_text, mentions, total_mentions):
@@ -620,43 +598,6 @@ def recalculate_article_relevance(article_id, session):
     return stats
 
 
-def extract_entities(text):
-    """
-    Extract named entities from text using spaCy with their sentence contexts.
-
-    Args:
-        text: Text to process
-
-    Returns:
-        Tuple of:
-            - entities: List of tuples: [(entity_text, entity_type), ...]
-            - entity_contexts: Dict mapping entity_text -> list of sentences containing it
-    """
-    if not nlp:
-        return [], {}
-
-    doc = nlp(text)
-    entities = []
-    entity_contexts = {}  # entity_text -> [sentence1, sentence2, ...]
-
-    for ent in doc.ents:
-        # Map spaCy label to our EntityType
-        entity_type = SPACY_TO_ENTITY_TYPE.get(ent.label_, None)
-        if entity_type:
-            entities.append((ent.text, entity_type))
-
-            # Get the sentence containing this entity
-            sentence_text = ent.sent.text.strip()
-
-            # Add to context list for this entity
-            if ent.text not in entity_contexts:
-                entity_contexts[ent.text] = []
-
-            # Only add if not already present (avoid duplicates)
-            if sentence_text not in entity_contexts[ent.text]:
-                entity_contexts[ent.text].append(sentence_text)
-
-    return entities, entity_contexts
 
 
 def process_article(article, batch_item, session):
@@ -825,83 +766,15 @@ def process_article(article, batch_item, session):
         else:
             logs.append("No sentences found, skipping clustering")
 
-        # ========== PHASE 2: NER ==========
-        logs.append("Phase 2: Extracting named entities...")
+        # ========== PHASE 2: NER - Now done by article_analysis ==========
+        logs.append("Phase 2: Entity extraction now done by article_analysis process")
+        logs.append("Run: news process start -d <domain> -t analyze_article")
 
-        # Extract entities from title, subtitle, and content
-        # Note: subtitle is included for NER but NOT for clustering
-        # Use period+space separator to prevent NER from merging entities across parts
-        # (e.g., "...con Epstein" + "Summers dijo..." would merge into "Epstein Summers")
-        text_parts = [article.title]
-        if article.subtitle:
-            text_parts.append(article.subtitle)
-        text_parts.append(article.content)
-        text = " ".join([f"{part}." if not part.endswith('.') else part for part in text_parts ])
-        entities, entity_contexts = extract_entities(text)
-
-        stats['entities_found'] = len(entities)
-        logs.append(f"Found {len(entities)} entities")
-
-        # Count entity mentions
-        entity_counts = {}
-        for entity_text, entity_type in entities:
-            # Skip if entity text is too short or just numbers
-            if len(entity_text) < 2 or entity_text.isdigit():
-                continue
-
-            # Count entity mentions for this article
-            entity_counts[entity_text] = entity_counts.get(entity_text, 0) + 1
-
-        # ========== PHASE 3: CALCULATE RELEVANCES WITH CLASSIFICATIONS ==========
-        logs.append("Phase 3: Calculating relevances with entity classifications...")
-
-        # Use new unified relevance calculation function
-        final_relevances = calculate_local_relevance_with_classification(
-            article=article,
-            entity_counts=entity_counts,
-            entity_contexts=entity_contexts,
-            entities_original=entities,
-            clusters_info=clusters_info,
-            sentences=sentences,
-            session=session
-        )
-
-        # Track statistics
+        stats['entities_found'] = 0
         stats['entities_new'] = 0
         stats['entities_existing'] = 0
-        stats['entities_classification'] = 0
 
-        # Insert relevances into article_entities
-        for data in final_relevances:
-            # Count new vs existing entities (only NER ones)
-            if data['origin'] == EntityOrigin.NER:  # Only count entities detected by NER
-                if data['is_new']:
-                    stats['entities_new'] += 1
-                else:
-                    stats['entities_existing'] += 1
-
-            # Track classification entities separately
-            if data['origin'] == EntityOrigin.CLASSIFICATION:
-                stats['entities_classification'] += 1
-
-            # Insert into article_entities association table
-            stmt = insert(article_entities).values(
-                article_id=article.id,
-                entity_id=data['entity_id'],
-                mentions=data['mentions'],
-                relevance=data['relevance'],
-                origin=data['origin'],
-                context_sentences=data['context_sentences']
-            )
-            session.execute(stmt)
-
-            # Log entity processing
-            origin_flag = " [classification]" if data['origin'] == EntityOrigin.CLASSIFICATION else ""
-            ignored_flag = " [IGNORED]" if data['relevance'] == 0.0 else ""
-            logs.append(f"  {data['entity_name']}: {data['mentions']} mentions, "
-                       f"relevance={data['relevance']:.4f}{origin_flag}{ignored_flag}")
-
-        # ========== PHASE 4: UPDATE DB RECORDS ==========
+        # ========== PHASE 3: UPDATE DB RECORDS ==========
         # Mark article as enriched
         article.enriched_at = datetime.utcnow()
 
