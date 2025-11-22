@@ -201,6 +201,40 @@ def compare_entities_with_ai(
             validation_context={'valid_entity_ids': [entity_a.id, entity_b.id]}
         )
 
+        # Step 2.5: Save pair comparison to database (regardless of confidence)
+        if not dry_run:
+            from db.models import EntityPairComparison
+
+            # Derive relationship from classification changes
+            # Look at the classifications to determine the relationship
+            relationship = "DIFFERENT"  # Default
+            for change in result.classification_changes:
+                if change.classification == 'alias':
+                    relationship = "SAME"
+                    break
+                elif change.classification == 'ambiguous':
+                    relationship = "AMBIGUOUS"
+                    break
+
+            # Check if pair already exists
+            min_id = min(entity_a.id, entity_b.id)
+            max_id = max(entity_a.id, entity_b.id)
+            existing_pair = session.query(EntityPairComparison).filter_by(
+                entity_a_id=min_id,
+                entity_b_id=max_id
+            ).first()
+
+            if not existing_pair:
+                pair_comparison = EntityPairComparison(
+                    entity_a_id=min_id,
+                    entity_b_id=max_id,
+                    relationship=relationship,
+                    confidence=result.confidence,
+                    reasoning=result.reasoning
+                )
+                session.add(pair_comparison)
+                session.flush()  # Use flush instead of commit to stay in transaction
+
         # Step 3: Validate confidence
         confidence = result.confidence
 
@@ -537,12 +571,9 @@ def batch_classify_entities(
     Returns:
         Statistics dictionary with counts
     """
-    # Query entities needing AI classification
+    # Query all entities for AI classification
     # Order by name_length DESC (longer first) to compare long->short
-    query = session.query(NamedEntity).filter(
-        NamedEntity.last_review_type == 'algorithmic',
-        NamedEntity.is_approved == 0
-    ).order_by(
+    query = session.query(NamedEntity).order_by(
         NamedEntity.name_length.desc(),
         NamedEntity.article_count.desc()
     )
@@ -557,8 +588,13 @@ def batch_classify_entities(
 
     entities = query.all()
 
-    # Track compared pairs to avoid duplicate API calls (A vs B = B vs A)
+    # Load already compared pairs from database to avoid retesting
+    from db.models import EntityPairComparison
+    existing_comparisons = session.query(EntityPairComparison).all()
     compared_pairs = set()
+    for comp in existing_comparisons:
+        # Store both orderings to handle bidirectional comparisons
+        compared_pairs.add(tuple(sorted([comp.entity_a_id, comp.entity_b_id])))
 
     # Build LSH index once for efficiency
     # Group entities by type, maintaining order (longer first)
@@ -624,5 +660,9 @@ def batch_classify_entities(
                             self.name = name
                     entity_b = EntityInfo(result['entity_b_id'], result['entity_b_name'])
                 on_result(entity, entity_b, status, result, error)
+
+    # Final commit for all pending changes (entity pairs, etc.)
+    if not dry_run:
+        session.commit()
 
     return stats

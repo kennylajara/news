@@ -43,8 +43,8 @@ La clasificación algorítmica procesa muchas entidades pero **no las aprueba to
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ 3. Clasificación con IA (solo is_approved=0)                │
-│    - LSH encuentra candidatos similares (O(n·k) vs O(n²))  │
-│    - Comparación 1v1 (ambas entidades pueden cambiar)      │
+│    - LSH encuentra candidatos similares (O(n·k) vs O(n²))   │
+│    - Comparación 1v1 (ambas entidades pueden cambiar)       │
 │    - Analiza contexto semántico completo                    │
 │    - Costo: ~$0.0004 por comparación                        │
 │    → last_review_type='ai-assisted'                         │

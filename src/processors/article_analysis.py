@@ -88,7 +88,9 @@ def process_article_analysis(article, batch_item, session):
                 entity = NamedEntity(
                     name=ent.text,
                     name_length=len(ent.text),
-                    entity_type=EntityType[ent.type.value]
+                    entity_type=EntityType[ent.type.value],
+                    is_approved=1,
+                    last_review_type='ai-assisted'
                 )
                 session.add(entity)
                 session.flush()

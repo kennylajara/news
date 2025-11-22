@@ -205,9 +205,9 @@ class NamedEntity(Base):
     __tablename__ = 'named_entities'
 
     id = Column(Integer, primary_key=True)
-    name = Column(String(255), nullable=False, unique=True, index=True)
+    name = Column(String(255), nullable=False, index=True)
     name_length = Column(Integer, nullable=False, index=True)  # len(name) - for ordering by length
-    entity_type = Column(Enum(EntityType), nullable=False)
+    entity_type = Column(Enum(EntityType), nullable=False, index=True)
     detected_types = Column(JSON, nullable=True)  # List of EntityType values spaCy has detected for this entity
 
     # Entity classification for disambiguation
@@ -251,6 +251,12 @@ class NamedEntity(Base):
         secondaryjoin=id == entity_group_members.c.member_id,
         backref='member_of_groups',  # Inverse: groups this entity is a member of
         viewonly=True  # Prevent automatic sync (we manage manually for temporal control)
+    )
+
+    # Table constraints
+    __table_args__ = (
+        # Unique constraint on (name, entity_type) to allow same name with different types
+        Index('idx_entity_name_type_unique', 'name', 'entity_type', unique=True),
     )
 
     def __repr__(self):
@@ -1167,3 +1173,30 @@ class EntityClassificationSuggestion(Base):
 
     def __repr__(self):
         return f"<EntityClassificationSuggestion(id={self.id}, entity_id={self.entity_id}, classification={self.suggested_classification}, confidence={self.confidence:.2f}, applied={bool(self.applied)})>"
+
+
+class EntityPairComparison(Base):
+    """Track entity pairs that have been compared by AI to avoid retesting."""
+    __tablename__ = 'entity_pair_comparisons'
+
+    id = Column(Integer, primary_key=True)
+    entity_a_id = Column(Integer, ForeignKey('named_entities.id', ondelete='CASCADE'), nullable=False)
+    entity_b_id = Column(Integer, ForeignKey('named_entities.id', ondelete='CASCADE'), nullable=False)
+
+    # Comparison results
+    relationship = Column(String(20), nullable=False)  # SAME, DIFFERENT, AMBIGUOUS
+    confidence = Column(Float, nullable=False)  # 0.0 to 1.0
+    reasoning = Column(Text, nullable=True)
+
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        # Ensure we don't compare the same pair twice (order-independent)
+        Index('idx_entity_pair_unique', 'entity_a_id', 'entity_b_id', unique=True),
+        Index('idx_entity_pair_relationship', 'relationship'),
+    )
+
+    def __repr__(self):
+        return f"<EntityPairComparison(id={self.id}, entities=[{self.entity_a_id}, {self.entity_b_id}], relationship={self.relationship}, confidence={self.confidence:.2f})>"
