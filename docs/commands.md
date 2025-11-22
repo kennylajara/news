@@ -64,7 +64,7 @@ Muestra detalles de un artículo específico.
 
 **Opciones:**
 - `-f, --full`: Mostrar contenido completo del artículo
-- `-e, --entities`: Mostrar entidades extraídas (NER)
+- `-e, --entities`: Mostrar entidades extraídas
 
 **Ejemplos:**
 ```bash
@@ -311,16 +311,20 @@ Crea y ejecuta un batch de procesamiento.
 **Opciones:**
 - `-d, --domain`: Dominio a procesar (requerido)
 - `-t, --type`: Tipo de procesamiento (requerido)
-  - `enrich_article`: Clustering + NER (sin OpenAI)
+  - `enrich_article`: Clustering semántico (sin OpenAI)
+  - `analyze_article`: Extracción de entidades + análisis con OpenAI
   - `generate_flash_news`: Generación de flash news con LLM
 - `-s, --size`: Tamaño del batch (default: 10)
 
 **Ejemplos:**
 ```bash
-# Paso 1: Enriquecimiento base
+# Paso 1: Enriquecimiento base (clustering)
 uv run news process start -d diariolibre.com -t enrich_article -s 10
 
-# Paso 2: Generación de flash news (requiere artículos enriquecidos)
+# Paso 2: Análisis con OpenAI (extracción de entidades + análisis profundo)
+uv run news process start -d diariolibre.com -t analyze_article -s 10
+
+# Paso 3: Generación de flash news (requiere artículos enriquecidos)
 uv run news process start -d diariolibre.com -t generate_flash_news -s 10
 ```
 
@@ -449,6 +453,51 @@ uv run news flash stats --domain diariolibre.com
 
 ---
 
+## Exportación
+
+### `news export corpus`
+
+Exporta artículos a una base de datos de corpus para tareas de ML/NLP.
+
+**Opciones:**
+- `-d, --domain`: Filtrar por dominio (ej: diariolibre.com)
+- `-l, --limit`: Limitar número de artículos a exportar
+- `--skip-enriched`: Solo exportar artículos sin enriquecimiento
+- `-o, --output`: Ruta de la base de datos de salida (default: `ai/corpus/raw_news.db`)
+
+**Ejemplos:**
+```bash
+# Exportar todos los artículos
+uv run news export corpus
+
+# Exportar artículos de un dominio específico
+uv run news export corpus --domain diariolibre.com
+
+# Exportar artículos limitados
+uv run news export corpus --domain diariolibre.com --limit 100
+
+# Exportar solo artículos no enriquecidos
+uv run news export corpus --skip-enriched --limit 50
+
+# Exportar a ubicación personalizada
+uv run news export corpus --output /path/to/corpus.db
+```
+
+**Formato de la base de datos de corpus:**
+- Base de datos SQLite separada optimizada para ML/NLP
+- Contenido en texto plano (sin markdown)
+- Campos separados de categoría y subcategoría
+- Ideal para entrenamiento de modelos, análisis de texto, etc.
+
+**Características:**
+- Preserva metadata original (título, autor, fecha, fuente)
+- Convierte contenido markdown a texto plano
+- Separa categoría/subcategoría en campos independientes
+- Incluye hash SHA-256 para deduplicación
+- Muestra progreso durante la exportación
+
+---
+
 ## Entidades
 
 ### `news entity list`
@@ -458,7 +507,7 @@ Lista entidades nombradas extraídas.
 **Opciones:**
 - `-l, --limit`: Número de entidades a mostrar (default: 20)
 - `-t, --type`: Filtrar por tipo de entidad
-  - Tipos válidos: person, norp, fac, org, gpe, loc, product, event, work_of_art, law, language, date, time, percent, money, quantity, ordinal, cardinal
+  - Tipos válidos: PERSON, ORG, GPE, EVENT, PRODUCT, NORP
 - `-r, --min-relevance`: Relevancia global mínima
 - `--no-pager`: Desactivar paginación
 
@@ -466,9 +515,9 @@ Lista entidades nombradas extraídas.
 ```bash
 uv run news entity list
 uv run news entity list --limit 50
-uv run news entity list --type person
+uv run news entity list --type PERSON
 uv run news entity list --min-relevance 5
-uv run news entity list --type org --min-relevance 10
+uv run news entity list --type ORG --min-relevance 10
 ```
 
 **Información mostrada:**
@@ -615,7 +664,7 @@ uv run news entity classify-ambiguous 123 45 67
 
 ### `news entity classify-not-entity <entity_id>`
 
-Marca una entidad como NOT_AN_ENTITY (falso positivo de NER).
+Marca una entidad como NOT_AN_ENTITY (falso positivo de extracción).
 
 **Ejemplo:**
 ```bash
@@ -731,7 +780,7 @@ uv run news entity recalculate-local --article-id 456
 **Proceso:**
 1. Lee artículos de `articles_needs_rerank`
 2. Para cada artículo:
-   - Carga entidades originales (solo `origin=NER`)
+   - Carga entidades originales (solo `origin=AI_ANALYSIS`)
    - Borra relaciones `article_entities`
    - Recalcula relevancia con clasificaciones actuales
    - Inserta nuevas relevances con flags de origen
@@ -747,28 +796,16 @@ uv run news entity recalculate-local --article-id 456
 
 ## Tipos de Entidades
 
-Los siguientes tipos de entidades son reconocidos por el sistema NER (basados en spaCy):
+Los siguientes tipos de entidades son extraídos por OpenAI durante el proceso `analyze_article`:
 
 | Tipo | Descripción |
 |------|-------------|
-| person | Personas, incluyendo ficticias |
-| norp | Nacionalidades, grupos religiosos o políticos |
-| fac | Edificios, aeropuertos, autopistas, puentes |
-| org | Compañías, agencias, instituciones |
-| gpe | Países, ciudades, estados |
-| loc | Ubicaciones no-GPE, cordilleras, cuerpos de agua |
-| product | Objetos, vehículos, alimentos |
-| event | Huracanes, batallas, guerras, eventos deportivos |
-| work_of_art | Títulos de libros, canciones |
-| law | Documentos convertidos en leyes |
-| language | Idiomas nombrados |
-| date | Fechas absolutas o relativas |
-| time | Tiempos menores a un día |
-| percent | Porcentajes |
-| money | Valores monetarios |
-| quantity | Medidas de peso o distancia |
-| ordinal | "primero", "segundo", etc. |
-| cardinal | Numerales |
+| PERSON | Personas (individuos específicos) |
+| ORG | Organizaciones (empresas, agencias, instituciones, partidos políticos) |
+| GPE | Ubicaciones geopolíticas (países, ciudades, estados) |
+| EVENT | Eventos (huracanes, batallas, conferencias, festivales) |
+| PRODUCT | Productos (objetos, vehículos, servicios, software) |
+| NORP | Nacionalidades, grupos religiosos o políticos |
 
 ---
 
@@ -787,19 +824,22 @@ uv run news article fetch "https://example.com/article2"
 # 3. Verificar artículos pendientes
 uv run news article list --source example.com --pending-enrich
 
-# 4. Procesar artículos (enriquecimiento base)
+# 4. Procesar artículos - Paso 1: Clustering
 uv run news process start -d example.com -t enrich_article -s 10
 
-# 5. Generar flash news
+# 5. Procesar artículos - Paso 2: Extracción de entidades con OpenAI
+uv run news process start -d example.com -t analyze_article -s 10
+
+# 6. Generar flash news
 uv run news process start -d example.com -t generate_flash_news -s 10
 
-# 6. Ver progreso de batches
+# 7. Ver progreso de batches
 uv run news process list --domain example.com
 
-# 7. Ver flash news generados
+# 8. Ver flash news generados
 uv run news flash list --domain example.com
 
-# 8. Ver estadísticas actualizadas
+# 9. Ver estadísticas actualizadas
 uv run news domain stats
 ```
 
@@ -810,7 +850,7 @@ uv run news domain stats
 uv run news entity list --limit 30
 
 # 2. Ver solo personas relevantes
-uv run news entity list --type person --min-relevance 5
+uv run news entity list --type PERSON --min-relevance 5
 
 # 3. Ver detalles de una entidad específica
 uv run news entity show "Luis Abinader"

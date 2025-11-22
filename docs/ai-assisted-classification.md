@@ -2,63 +2,57 @@
 
 ## Contexto
 
-El sistema ya cuenta con:
-1. **Clasificación algorítmica** (`auto-classify`) - Detecta patrones heurísticos simples (iniciales, nombres parciales)
-   - Gratis y muy rápido
-   - Aprueba casos obvios automáticamente
-2. **Clasificación manual** - El usuario revisa y clasifica entidades manualmente
-   - Costoso en tiempo
-   - Necesario para casos complejos
+El sistema cuenta con:
+1. **Extracción de entidades con OpenAI** - Durante `analyze_article`, OpenAI extrae entidades y las auto-aprueba (`is_approved=1`, `last_review_type='ai-assisted'`)
+2. **Clasificación AI** (`ai-classify`) - LSH + comparación semántica pairwise para encontrar entidades relacionadas
+   - Tracking de pares comparados (evita re-testar)
+   - Análisis contextual profundo
+3. **Clasificación manual** - El usuario puede revisar y reclasificar entidades manualmente si es necesario
+   - `last_review_type='manual'`
 
 ## Problema a Resolver
 
-La clasificación algorítmica procesa muchas entidades pero **no las aprueba todas**:
-- Marca como `last_review_type='algorithmic'`
-- Pero deja `is_approved=0` en casos con incertidumbre
+Después de la extracción, cientos de entidades quedan duplicadas/no relacionadas:
+- **Variantes de nombres**: "Luis" vs "Luis Abinader"
+- **Iniciales/Acrónimos**: "JCE" vs "Junta Central Electoral"
+- **Nombres parciales**: "Abinader" vs "Luis Abinader"
+- **Mismo nombre, tipos diferentes**: "Milicia" (ORG) vs "Milicia" (NORP)
 
-**Limitaciones del algoritmo:**
-- **No entiende contexto semántico**: "Luis" podría ser "Luis Abinader" o "Luis Gil"
-- **No detecta sinónimos**: "Banco Central" vs "BCRD" (sin iniciales obvias)
-- **Casos ambiguos complejos**: "Fernández" podría referirse a 5+ personas diferentes
-- **Nombres con variaciones**: "República Dominicana" vs "Rep. Dominicana" vs "RD"
+**Resultado**: Miles de entidades sin relacionar, requiriendo revisión manual costosa.
 
-**Resultado:** Miles de entidades clasificadas algorítmicamente pero **sin aprobar** (`is_approved=0`), requiriendo revisión manual costosa.
-
-## Estrategia: Clasificación Híbrida
+## Estrategia: Clasificación AI con Tracking de Pares
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ 1. NER detecta entidades → CANONICAL (last_review_type=none)│
+│ 1. OpenAI extrae entidades → CANONICAL                      │
+│    Durante analyze_article                                  │
+│    → is_approved=1, last_review_type='ai-assisted'          │
 └────────────────────┬────────────────────────────────────────┘
                      │
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 2. Clasificación ALGORÍTMICA (heurísticas)                  │
-│    - Gratis y rápido                                        │
-│    - Aprueba casos obvios (is_approved=1)                   │
-│    - Deja sin aprobar casos dudosos (is_approved=0)         │
-│    → last_review_type='algorithmic'                         │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 3. Clasificación con IA (solo is_approved=0)                │
-│    - LSH encuentra candidatos similares (O(n·k) vs O(n²))   │
-│    - Comparación 1v1 (ambas entidades pueden cambiar)       │
-│    - Analiza contexto semántico completo                    │
-│    - Costo: ~$0.0004 por comparación                        │
+│ 2. Clasificación con IA (ai-classify)                       │
+│    - LSH encuentra candidatos similares (O(n) vs O(n²))     │
+│    - Comparación semántica 1v1 con OpenAI                   │
+│    - Tracking de pares: NO re-testa pares comparados        │
+│    - Guarda en entity_pair_comparisons                      │
+│    - Costo: ~$0.0001 por comparación                        │
 │    → last_review_type='ai-assisted'                         │
 └────────────────────┬────────────────────────────────────────┘
                      │
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 4. Revisión MANUAL (solo casos muy complejos)               │
-│    - Solo entidades que IA no aprobó                        │
+│ 3. Revisión MANUAL (opcional, solo casos complejos)         │
+│    - Solo si necesitas corregir decisiones de IA            │
 │    → last_review_type='manual'                              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Ventaja:** El algoritmo procesa miles de entidades gratis, y la IA solo revisa las que tienen incertidumbre (ahorro de costos).
+**Ventajas:**
+- ✅ No re-testa pares ya comparados (ahorro de costos API)
+- ✅ Análisis semántico profundo (entiende contexto)
+- ✅ Audit trail completo en `entity_pair_comparisons`
+- ✅ Escalable con LSH (no compara todas con todas)
 
 ---
 
@@ -77,7 +71,7 @@ La clasificación algorítmica procesa muchas entidades pero **no las aprueba to
 
 ```python
 # 1. Indexar todas las entidades CANONICAL con MinHash
-matcher = EntityLSHMatcher(threshold=0.4)
+matcher = EntityLSHMatcher(threshold=0.3)
 matcher.index_entities(all_canonical_entities)
 
 # 2. Para cada entidad a evaluar, LSH encuentra top-K similares
@@ -100,13 +94,13 @@ for candidate, jaccard_sim in candidates:
 ### MinHash y Shingles
 
 **Shingles** = Fragmentos de texto para comparación:
-- **Word shingles**: Palabras completas (`["luis", "abinader", "corona"]`)
-- **Character n-grams**: Fragmentos de 3 caracteres (`["lui", "uis", "is ", "s a", " ab", ...]`)
+- **Character n-grams**: Fragmentos de 2 caracteres (`["lu", "ui", "is", "s ", " a", "ab", ...]`)
+- Word shingles están deshabilitados por defecto (mejora recall)
 
-**MinHash** = Firma compacta de shingles (128 permutaciones):
+**MinHash** = Firma compacta de shingles (50 permutaciones con 25 bands):
 ```python
-shingles = {"luis", "abinader", "lui", "uis", "is ", ...}
-minhash = MinHash(num_perm=128)
+shingles = {"lu", "ui", "is", " a", "ab", "bi", ...}
+minhash = MinHash(num_perm=50)
 for s in shingles:
     minhash.update(s.encode('utf8'))
 ```
@@ -131,9 +125,10 @@ from processors.entity_lsh_matcher import EntityLSHMatcher
 
 # Crear índice LSH
 matcher = EntityLSHMatcher(
-    threshold=0.4,      # Mínimo 40% similitud Jaccard
-    num_perm=128,       # Permutaciones MinHash
-    char_ngram_size=3   # Tamaño de character n-grams
+    threshold=0.3,           # Umbral de similitud Jaccard (30%)
+    num_perm=50,             # Permutaciones MinHash
+    char_ngram_size=2,       # Tamaño de character n-grams
+    use_word_shingles=False  # No usar tokens de palabras
 )
 
 # Indexar entidades CANONICAL
@@ -200,13 +195,99 @@ stats = batch_classify_entities(
 **Schema de respuesta:**
 ```python
 class StructuredOutput(BaseModel):
-    relationship: Literal['same_entity', 'different_entities', 'ambiguous_usage']
-    entity_a_action: Literal['make_alias', 'make_canonical', 'make_not_an_entity', 'no_change']
-    entity_b_action: Literal['make_alias', 'make_canonical', 'make_not_an_entity', 'no_change']
+    classification_changes: List[ClassificationChange]  # Cambios a aplicar
     confidence: float  # 0.0-1.0
     reasoning: str
-    alternative_relationship: Optional[...]
-    alternative_confidence: Optional[float]
+
+class ClassificationChange(BaseModel):
+    entity_id: int
+    classification: Literal['alias', 'ambiguous', 'not_an_entity', 'none']
+    canonical_id: Optional[int]  # Para ALIAS
+    canonical_ids: Optional[List[int]]  # Para AMBIGUOUS
+```
+
+#### 4. Tracking de Pares Comparados
+
+**Tabla**: `entity_pair_comparisons`
+
+**Propósito**: Guardar historial de todas las comparaciones para **no re-testar** pares ya analizados.
+
+**Schema**:
+```sql
+CREATE TABLE entity_pair_comparisons (
+    id INTEGER PRIMARY KEY,
+    entity_a_id INTEGER NOT NULL,  -- Siempre el ID menor
+    entity_b_id INTEGER NOT NULL,  -- Siempre el ID mayor
+    relationship VARCHAR(20) NOT NULL,  -- SAME, DIFFERENT, AMBIGUOUS
+    confidence FLOAT NOT NULL,
+    reasoning TEXT,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE(entity_a_id, entity_b_id)
+)
+```
+
+**Flujo de tracking**:
+```python
+# Antes de comparar par con IA, verificar si ya existe
+min_id = min(entity_a.id, entity_b.id)
+max_id = max(entity_a.id, entity_b.id)
+
+existing = session.query(EntityPairComparison).filter_by(
+    entity_a_id=min_id,
+    entity_b_id=max_id
+).first()
+
+if existing:
+    # ✅ Par ya comparado, skip
+    continue
+
+# ❌ Par nuevo, comparar con IA
+result = compare_entities_with_ai(entity_a, entity_b, session)
+
+# Derivar relación de clasificaciones
+relationship = "DIFFERENT"  # Default
+for change in result.classification_changes:
+    if change.classification == 'alias':
+        relationship = "SAME"
+        break
+    elif change.classification == 'ambiguous':
+        relationship = "AMBIGUOUS"
+        break
+
+# Guardar comparación
+pair = EntityPairComparison(
+    entity_a_id=min_id,
+    entity_b_id=max_id,
+    relationship=relationship,
+    confidence=result.confidence,
+    reasoning=result.reasoning
+)
+session.add(pair)
+session.flush()
+```
+
+**Beneficios**:
+- ✅ No re-testa pares (ahorro de costos API)
+- ✅ Audit trail completo de decisiones
+- ✅ Permite revisión manual de comparaciones
+- ✅ Datos para análisis y mejora del sistema
+
+**Queries útiles**:
+```sql
+-- Ver todas las comparaciones
+SELECT * FROM entity_pair_comparisons ORDER BY created_at DESC;
+
+-- Ver solo pares considerados iguales
+SELECT * FROM entity_pair_comparisons WHERE relationship = 'SAME';
+
+-- Ver comparaciones con baja confianza (revisar manualmente)
+SELECT * FROM entity_pair_comparisons WHERE confidence < 0.7;
+
+-- Ver estadísticas por relación
+SELECT relationship, COUNT(*), AVG(confidence)
+FROM entity_pair_comparisons
+GROUP BY relationship;
 ```
 
 ---
@@ -423,7 +504,7 @@ uv run news entity ai-classify --type person --limit 50 --min-confidence 0.75
 ### 2. Índice Reutilizable
 ```python
 # Construir índice una vez
-lsh_matcher = build_lsh_index_for_type(session, 'person', threshold=0.4)
+lsh_matcher = build_lsh_index_for_type(session, 'person', threshold=0.3)
 
 # Reusar para múltiples entidades
 for entity in entities:

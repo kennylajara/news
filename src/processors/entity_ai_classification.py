@@ -469,7 +469,7 @@ def classify_entity_with_ai(
             lsh_matcher = build_lsh_index_for_type(
                 session,
                 entity.entity_type.value,
-                threshold=0.4,
+                threshold=0.3,
                 only_canonical=True
             )
 

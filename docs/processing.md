@@ -8,17 +8,50 @@ El sistema de procesamiento por lotes permite ejecutar diferentes tipos de proce
 
 ### Enriquecimiento de Artículos (`enrich_article`)
 
-Proceso base que incluye clustering semántico y extracción de entidades nombradas (NER). **No incluye llamadas a OpenAI**.
+Proceso base que incluye **solo clustering semántico**. La extracción de entidades se hace ahora en `analyze_article` con OpenAI.
 
 **Características**:
 - **Clustering semántico** de oraciones con clasificación (core, secondary, filler)
-- **NER con spaCy**: Modelo `es_core_news_sm` (español), 18 tipos de entidades
-- **Relevancia ajustada por clusters**: Entidades en clusters core reciben boost (1.3x)
-- Asocia entidades a artículos con conteo de menciones
-- Calcula relevancia local (ver sección "Cálculo de Relevancia")
-- Actualiza contador global de artículos por entidad
+- Genera embeddings con `paraphrase-multilingual-MiniLM-L12-v2`
+- Clustering con UMAP + HDBSCAN
+- Guarda en `article_clusters` y `article_sentences`
+- Marca artículo como `cluster_enriched_at` y `enriched_at`
 - Guarda logs detallados del procesamiento
-- **Performance**: ~7-8 segundos por artículo (sin llamadas API)
+- **Performance**: ~2-3 segundos por artículo
+
+**Nota**: La extracción de entidades ahora se hace en `analyze_article` con OpenAI para mayor precisión.
+
+### Análisis Profundo de Artículos (`analyze_article`)
+
+Proceso de análisis avanzado con OpenAI que extrae entidades nombradas y genera análisis detallado para el sistema de recomendaciones. **Requiere que los artículos ya estén enriquecidos** (con clustering completado).
+
+**Características**:
+- **Extracción de entidades con OpenAI**: Personas, organizaciones, ubicaciones, eventos, productos, NORP
+- **Análisis profundo para recomendaciones**: Conceptos clave, relaciones semánticas, marcos narrativos
+- **Structured Outputs**: Usa esquema Pydantic para garantizar formato consistente
+- **Dos tablas generadas**:
+  - `article_entities`: Entidades extraídas con menciones y relevancia
+  - `article_analyses`: Análisis completo del artículo (tono, formato, audiencia, calidad, etc.)
+- **Idempotente**: Detecta y salta artículos que ya tienen análisis
+- **Manejo robusto de errores**: Fallas individuales no afectan otros artículos
+- **Performance**: ~5-10 segundos por artículo (según modelo de OpenAI)
+
+**Campos generados en `article_analyses`**:
+- **Semántica**: `key_concepts`, `semantic_relations`
+- **Narrativa**: `narrative_frames`, `editorial_tone`, `style_descriptors`
+- **Controversia y sesgo**: `controversy_score` (0-100), `political_bias` (-100 a 100)
+- **Calidad**: `quality_score` (0-100), `has_named_sources`, `has_data_or_statistics`, `has_multiple_perspectives`
+- **Formato**: `content_format` (news/feature/opinion/analysis/interview/listicle), `temporal_relevance` (breaking/timely/evergreen)
+- **Audiencia**: `audience_education`, `target_age_range`, `target_professions`, `required_interests`
+- **Industria y geografía**: `relevant_industries`, `geographic_scope`, `cultural_context`
+- **Diversidad**: `voices_represented`, `source_diversity_score` (0-100)
+
+**Uso en sistema de recomendaciones**: Permite matching avanzado basado en:
+- Tono editorial (neutral, crítico, celebratorio, etc.)
+- Formato de contenido (noticias vs. análisis vs. opinión)
+- Nivel educativo de la audiencia
+- Industrias relevantes
+- Calidad y sesgo político
 
 ### Generación de Flash News (`generate_flash_news`)
 
@@ -45,16 +78,20 @@ uv run news process start -d <dominio> -t <tipo> -s <tamaño>
 **Parámetros**:
 - `-d, --domain`: Dominio a procesar (requerido)
 - `-t, --type`: Tipo de procesamiento (requerido)
-  - `enrich_article`: Clustering + NER (sin OpenAI)
-  - `generate_flash_news`: Generación de flash news con LLM
+  - `enrich_article`: Clustering semántico de oraciones (sin OpenAI)
+  - `analyze_article`: Extracción de entidades + análisis profundo (con OpenAI)
+  - `generate_flash_news`: Generación de flash news con LLM (con OpenAI)
 - `-s, --size`: Tamaño del batch (default: 10)
 
 **Ejemplos**:
 ```bash
-# Paso 1: Enriquecimiento base (clustering + NER)
+# Paso 1: Enriquecimiento base (clustering semántico)
 uv run news process start -d diariolibre.com -t enrich_article -s 10
 
-# Paso 2: Generación de flash news (OpenAI)
+# Paso 2: Análisis profundo con OpenAI (extracción de entidades + análisis)
+uv run news process start -d diariolibre.com -t analyze_article -s 10
+
+# Paso 3: Generación de flash news (OpenAI)
 uv run news process start -d diariolibre.com -t generate_flash_news -s 10
 ```
 
@@ -127,26 +164,7 @@ uv run news process show 1 --item 5
    - Guarda en `article_clusters` y `article_sentences`
    - Marca artículo como `cluster_enriched_at`
 
-   **FASE 2: Named Entity Recognition**
-   - Extrae entidades con spaCy desde título, subtítulo y contenido
-   - Detecta 18 tipos de entidades (PERSON, ORG, GPE, etc.)
-   - Cuenta menciones de cada entidad
-   - Crea/actualiza registros en `named_entities`
-
-   **FASE 2.1: Cluster Boost**
-   - Aplica multiplicadores según presencia en clusters:
-     - Cluster core: **1.3x**
-     - Cluster secondary: **1.0x**
-     - Resto (filler/sin cluster): **0.7x**
-
-   **FASE 3: Normalización de Relevancia**
-   - Calcula relevancia base (menciones/total)
-   - Aplica bonos (título +50%, subtítulo +25%, posición, menciones extra)
-   - Aplica cluster boost
-   - Normaliza para que entidad más relevante = 1.0
-   - Guarda en `article_entities` con menciones y relevancia
-
-   **FASE 4: Finalización**
+   **FASE 2: Finalización**
    - Marca artículo como enriquecido (`enriched_at`)
    - Actualiza batch item con logs y estadísticas
    - Commit a base de datos
@@ -185,30 +203,74 @@ uv run news process show 1 --item 5
 
 4. **Finalización del batch**: Actualiza estadísticas agregadas
 
+### Proceso: `analyze_article`
+
+Genera análisis profundo de artículos usando OpenAI para extracción de entidades y análisis multi-dimensional.
+
+**Prerrequisitos**: Artículos que NO tengan registro en `article_analyses` (evita re-análisis innecesario)
+
+**Proceso**:
+
+1. **Selección de artículos**: LEFT JOIN con `article_analyses WHERE article_analyses.id IS NULL`
+2. **Creación de batch y items**: Transacción atómica
+3. **Procesamiento por artículo**:
+
+   **FASE 1: Extracción de Entidades con OpenAI**
+   - Llama OpenAI API con artículo completo (título, subtítulo, contenido, fecha, categoría)
+   - Extrae entidades de **6 tipos**:
+     - PERSON (personas)
+     - ORG (organizaciones, compañías, instituciones)
+     - GPE (países, ciudades, estados)
+     - EVENT (eventos, huracanes, batallas, etc.)
+     - PRODUCT (productos, servicios)
+     - NORP (nacionalidades, grupos religiosos/políticos)
+   - Cuenta menciones por entidad
+   - **Auto-aprueba** todas las entidades: `is_approved=1`, `last_review_type='ai-assisted'`
+   - Guarda en `named_entities` (permite mismo nombre con diferentes tipos)
+   - Guarda relación artículo-entidad en `article_entities` con:
+     - `mentions`: Número de menciones en el artículo
+     - `relevance`: Calculada como `min(mentions / 10.0, 1.0)`
+     - `origin`: `AI_ANALYSIS`
+
+   **FASE 2: Análisis Multi-dimensional**
+   - Extrae 13 factores de análisis del artículo:
+     - **Semántica**: Conceptos clave
+     - **Narrativa**: Frames narrativos, tono editorial
+     - **Controversia/sesgo**: Puntaje de controversia, sesgo político
+     - **Formato**: Tipo de contenido (noticia, opinión, análisis, etc.)
+     - **Temporal**: Relevancia temporal (breaking, recent, timeless, etc.)
+     - **Audiencia**: Nivel educativo, rango de edad
+     - **Industria**: Industrias relevantes
+     - **Geográfico**: Alcance geográfico
+   - Guarda en `article_analysis` (tabla separada con FK a article_id)
+
+   **FASE 3: Finalización**
+   - Actualiza batch item con logs y estadísticas
+   - Commit a base de datos
+
+4. **Finalización del batch**: Actualiza estadísticas agregadas
+
+**Performance**: ~10-15 segundos por artículo (depende de latencia OpenAI)
+
 ## Entidades Extraídas
 
-Las entidades se clasifican en 18 tipos según las etiquetas de spaCy:
+El sistema extrae entidades usando **OpenAI** durante el proceso `analyze_article`:
+
+### Extracción con OpenAI (`analyze_article`)
+
+Extrae **6 tipos** de entidades con análisis semántico profundo:
 
 | Tipo | Descripción |
 |------|-------------|
 | PERSON | Personas, incluyendo ficticias |
-| NORP | Nacionalidades, grupos religiosos o políticos |
-| FAC | Edificios, aeropuertos, autopistas, puentes |
 | ORG | Compañías, agencias, instituciones |
 | GPE | Países, ciudades, estados |
-| LOC | Ubicaciones no-GPE, cordilleras, cuerpos de agua |
-| PRODUCT | Objetos, vehículos, alimentos |
 | EVENT | Huracanes, batallas, guerras, eventos deportivos |
-| WORK_OF_ART | Títulos de libros, canciones |
-| LAW | Documentos convertidos en leyes |
-| LANGUAGE | Idiomas nombrados |
-| DATE | Fechas absolutas o relativas |
-| TIME | Tiempos menores a un día |
-| PERCENT | Porcentajes |
-| MONEY | Valores monetarios |
-| QUANTITY | Medidas de peso o distancia |
-| ORDINAL | "primero", "segundo", etc. |
-| CARDINAL | Numerales |
+| PRODUCT | Objetos, vehículos, alimentos, servicios |
+| NORP | Nacionalidades, grupos religiosos o políticos |
+
+- **EntityOrigin**: `AI_ANALYSIS`
+- **Auto-aprobación**: Todas las entidades se crean con `is_approved=1`, `last_review_type='ai-assisted'`
 
 ## Campos de Seguimiento
 
@@ -535,7 +597,7 @@ print(result.campo1)
 
 ### Introducción
 
-El sistema de desambiguación resuelve el problema de entidades ambiguas en NER, donde el mismo texto puede referirse a múltiples personas/organizaciones diferentes. Por ejemplo:
+El sistema de desambiguación resuelve el problema de entidades ambiguas extraídas por OpenAI, donde el mismo texto puede referirse a múltiples personas/organizaciones diferentes. Por ejemplo:
 - **"Luis"** puede ser → Luis Abinader (presidente) o Luis Fonsi (cantante)
 - **"PRM"** puede ser → Partido Revolucionario Moderno o Performance Rights Management
 
@@ -587,12 +649,12 @@ Resultado: Luis Abinader recibe +0.6 (no se divide)
 ```
 
 #### 4. **NOT_AN_ENTITY**
-Falso positivo de NER (no es realmente una entidad).
+Falso positivo de extracción (no es realmente una entidad).
 
 **Características**:
 - No puede tener `canonical_refs`
 - Su relevancia siempre es **0.0** (ignorada completamente)
-- Útil para limpiar detecciones erróneas de spaCy
+- Útil para limpiar detecciones erróneas del LLM
 
 **Ejemplo**: "Día" detectado como entidad pero es palabra común
 
@@ -622,19 +684,88 @@ MAX_AMBIGUITY_THRESHOLD = 10  # Ignorar si tiene más de este número de canonic
 
 El campo `article_entities.origin` distingue cómo llegó la entidad al artículo:
 
-- **`NER`**: Detectada originalmente por spaCy en el contenido
-- **`CLASSIFICATION`**: Agregada automáticamente por el sistema de clasificación
+- **`AI_ANALYSIS`**: Detectada por OpenAI durante `analyze_article`
+- **`CLASSIFICATION`**: Agregada automáticamente por el sistema de clasificación al resolver aliases/ambiguos
 
 **Ejemplo**:
 ```
-Artículo original (NER): "Luis" (3 menciones)
+Artículo original (AI_ANALYSIS): "Luis" (3 menciones)
 Clasificas: "Luis" como ALIAS de "Luis Abinader"
 Sistema agrega artificialmente: "Luis Abinader" con origin=CLASSIFICATION
 ```
 
-**Protección contra duplicación**: Si "Luis Abinader" ya fue detectado por NER, NO se agrega artificialmente otra vez (evita duplicar link juice).
+**Protección contra duplicación**: Si "Luis Abinader" ya fue detectado por AI_ANALYSIS, NO se agrega artificialmente otra vez (evita duplicar link juice).
 
-### Comandos de Clasificación
+### Clasificación Automática con IA
+
+El sistema ofrece clasificación automatizada usando **LSH (Locality-Sensitive Hashing) + Comparación 1v1 con OpenAI**.
+
+#### Comando: `ai-classify`
+
+```bash
+# Clasificar todas las entidades
+uv run news entity ai-classify
+
+# Clasificar solo un tipo de entidad
+uv run news entity ai-classify --type PERSON
+
+# Ver qué haría sin ejecutar
+uv run news entity ai-classify --dry-run
+
+# Con verbose logging
+uv run news entity ai-classify --verbose
+
+# Ajustar umbral LSH (default 0.7)
+uv run news entity ai-classify --lsh-threshold 0.8
+```
+
+#### Proceso de Clasificación AI
+
+**FASE 1: Descubrimiento de Candidatos con LSH**
+- Convierte nombres de entidades a caracteres individuales
+- Genera MinHash signatures (128 permutaciones)
+- Encuentra pares similares usando umbral configurable (default 0.7)
+- **No requiere llamadas a API** - puramente algorítmico
+
+**FASE 2: Comparación Semántica con OpenAI**
+- Para cada par candidato, llama OpenAI para análisis semántico
+- Carga pares ya comparados desde `entity_pair_comparisons`
+- **Evita re-testar** pares ya procesados (ahorro de costos API)
+- Analiza contexto, nombres, y tipos de entidad
+
+**FASE 3: Aplicación de Clasificaciones**
+El LLM puede clasificar una entidad como:
+- **ALIAS**: Variante/abreviatura → llama `set_as_alias()`
+- **AMBIGUOUS**: Puede referirse a múltiples → llama `set_as_ambiguous()`
+- **NOT_AN_ENTITY**: Falso positivo → llama `set_as_not_entity()`
+- **NO_CHANGE**: Son entidades diferentes → no hace nada
+
+**FASE 4: Guardado de Comparaciones**
+- Cada comparación se guarda en `entity_pair_comparisons`
+- Incluye: relación (SAME/DIFFERENT/AMBIGUOUS), confianza, razonamiento
+- Relación derivada de los cambios de clasificación
+- Evita duplicados con índice único en `(entity_a_id, entity_b_id)`
+
+**Beneficios del tracking de pares**:
+- ✅ No re-testa pares ya comparados (ahorro de costos)
+- ✅ Historial completo de decisiones del LLM
+- ✅ Permite audit trail y revisión manual
+- ✅ Puede usarse para entrenar modelos futuros
+
+```sql
+-- Ver todas las comparaciones
+SELECT * FROM entity_pair_comparisons;
+
+-- Ver solo entidades consideradas iguales
+SELECT * FROM entity_pair_comparisons WHERE relationship = 'SAME';
+
+-- Ver comparaciones con baja confianza
+SELECT * FROM entity_pair_comparisons WHERE confidence < 0.7;
+```
+
+### Comandos de Clasificación Manual
+
+Si necesitas clasificar manualmente (alternativa o complemento a `ai-classify`):
 
 #### Listar entidades pendientes de revisión
 ```bash
@@ -698,7 +829,7 @@ uv run news entity recalculate-local --article-id 456
 **Proceso interno**:
 1. Lee artículos de `articles_needs_rerank`
 2. Para cada artículo:
-   - Carga entidades originales (filtra por `origin=NER`)
+   - Carga entidades originales (filtra por `origin=AI_ANALYSIS`)
    - Borra todas las relaciones `article_entities`
    - Recalcula relevancia con clasificaciones actuales
    - Inserta nuevas relevances con `origin` flags
@@ -744,7 +875,44 @@ entity.set_as_not_entity(session)
 
 ### Flujo Completo de Desambiguación
 
-**Ejemplo real**: Desambiguar "Luis"
+#### Opción 1: Clasificación Automática con IA (Recomendado)
+
+```bash
+# 1. Extraer entidades de artículos con OpenAI
+uv run news process start -t analyze_article
+
+# 2. Ejecutar clasificación AI-assisted
+uv run news entity ai-classify --verbose
+
+# Output:
+# 🔍 Starting AI-assisted entity classification...
+# 📊 Found 150 entities to classify (type: ALL)
+# 🔍 LSH candidate discovery...
+# ✓ Found 45 candidate pairs (threshold: 0.7)
+#
+# 🤖 AI semantic comparison (1v1)...
+# ✓ Compared 45 pairs, classified 12 entities
+#
+# 📝 Classification summary:
+#    • 8 entities → ALIAS
+#    • 2 entities → AMBIGUOUS
+#    • 2 entities → NOT_AN_ENTITY
+#
+# ✅ Classification complete!
+
+# 3. Recalcular relevancia local (si hubo cambios)
+uv run news entity recalculate-local
+
+# 4. Recalcular relevancia global (PageRank)
+uv run news entity rerank
+
+# 5. Ver entidades más relevantes
+uv run news entity list --order-by global_rank --limit 20
+```
+
+#### Opción 2: Clasificación Manual
+
+**Ejemplo real**: Desambiguar "Luis" manualmente
 
 ```bash
 # 1. Identificar entidad ambigua

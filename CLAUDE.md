@@ -199,7 +199,7 @@ Para detalles técnicos, consultar:
 - **[docs/database.md](docs/database.md)** - Esquema de base de datos, operaciones CRUD
 - **[docs/cache.md](docs/cache.md)** - Sistema de caché de URLs (LEER ANTES DE RECREAR news.db)
 - **[docs/extractors.md](docs/extractors.md)** - Guía completa para crear extractores
-- **[docs/processing.md](docs/processing.md)** - Sistema de batches, NER, clustering y flash news
+- **[docs/processing.md](docs/processing.md)** - Sistema de batches, clustering y flash news
 
 > Importante: Siempre actualizar la documentación técnica cuando se modifica código relacionado a lo que está documentado
 
@@ -246,10 +246,13 @@ uv run news cache clear --article "<URL>"      # Limpiar URL específica
 # PROCESAMIENTO CON IA
 # ============================================
 
-# Paso 1: Enriquecimiento base (clustering + NER)
+# Paso 1: Enriquecimiento base (clustering semántico)
 uv run news process start -d diariolibre.com -t enrich_article -s 10
 
-# Paso 2: Generación de flash news (OpenAI)
+# Paso 2: Análisis con OpenAI (extracción de entidades + análisis profundo)
+uv run news process start -d diariolibre.com -t analyze_article -s 10
+
+# Paso 3: Generación de flash news (OpenAI)
 uv run news process start -d diariolibre.com -t generate_flash_news -s 10
 
 # Ver flash news generados

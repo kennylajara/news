@@ -69,13 +69,14 @@ def _get_spanish_initials_variants(text: str) -> List[str]:
     return [expanded, collapsed]
 
 
-def text_to_shingles(text: str, char_ngram_size: int = 3) -> Set[str]:
+def text_to_shingles(text: str, char_ngram_size: int = 2, use_word_shingles: bool = False) -> Set[str]:
     """
-    Convert text to shingles (word tokens + character n-grams).
+    Convert text to shingles (character n-grams, optionally + word tokens).
 
     Args:
         text: Input text
-        char_ngram_size: Size of character n-grams (default 3)
+        char_ngram_size: Size of character n-grams (default 2)
+        use_word_shingles: If True, also include word tokens (default False)
 
     Returns:
         Set of shingle strings
@@ -96,13 +97,14 @@ def text_to_shingles(text: str, char_ngram_size: int = 3) -> Set[str]:
 
     text = normalize_text(text)
 
-    # Word-level shingles (full words)
-    words = text.split()
-    for word in words:
-        if word:  # Skip empty strings
-            shingles.add(word)
+    # Word-level shingles (optional, disabled by default per benchmark)
+    if use_word_shingles:
+        words = text.split()
+        for word in words:
+            if word:  # Skip empty strings
+                shingles.add(word)
 
-    # Character-level n-grams
+    # Character-level n-grams (primary matching method)
     for i in range(len(text) - char_ngram_size + 1):
         ngram = text[i:i + char_ngram_size]
         if ngram.strip():  # Skip pure whitespace
@@ -111,13 +113,13 @@ def text_to_shingles(text: str, char_ngram_size: int = 3) -> Set[str]:
     return shingles
 
 
-def create_minhash(shingles: Set[str], num_perm: int = 128) -> MinHash:
+def create_minhash(shingles: Set[str], num_perm: int = 50) -> MinHash:
     """
     Create MinHash signature from shingles.
 
     Args:
         shingles: Set of shingle strings
-        num_perm: Number of permutations (higher = more accurate, slower)
+        num_perm: Number of permutations (default 50)
 
     Returns:
         MinHash object
@@ -138,22 +140,33 @@ class EntityLSHMatcher:
 
     def __init__(
         self,
-        threshold: float = 0.4,
-        num_perm: int = 128,
-        char_ngram_size: int = 3
+        threshold: float = 0.3,
+        num_perm: int = 50,
+        char_ngram_size: int = 2,
+        use_word_shingles: bool = False
     ):
         """
         Initialize LSH matcher.
 
         Args:
-            threshold: Minimum Jaccard similarity to consider (0.0-1.0)
-            num_perm: Number of MinHash permutations
-            char_ngram_size: Size of character n-grams for shingles
+            threshold: Minimum Jaccard similarity to consider (default 0.3)
+            num_perm: Number of MinHash permutations (default 50)
+            char_ngram_size: Size of character n-grams (default 2)
+            use_word_shingles: Include word tokens in shingles (default False)
         """
         self.threshold = threshold
         self.num_perm = num_perm
         self.char_ngram_size = char_ngram_size
-        self.lsh = MinHashLSH(threshold=threshold, num_perm=num_perm)
+        self.use_word_shingles = use_word_shingles
+
+        # Use 25 bands for 50 permutations (optimal for threshold 0.3)
+        bands = 25 if num_perm == 50 else None
+
+        if bands:
+            self.lsh = MinHashLSH(threshold=threshold, num_perm=num_perm, params=(bands, num_perm // bands))
+        else:
+            self.lsh = MinHashLSH(threshold=threshold, num_perm=num_perm)
+
         self.minhashes = {}  # entity_id -> MinHash
         self.entities = {}   # entity_id -> NamedEntity
 
@@ -164,7 +177,7 @@ class EntityLSHMatcher:
         Args:
             entity: NamedEntity to index
         """
-        shingles = text_to_shingles(entity.name, self.char_ngram_size)
+        shingles = text_to_shingles(entity.name, self.char_ngram_size, self.use_word_shingles)
         minhash = create_minhash(shingles, self.num_perm)
 
         # Store
@@ -204,7 +217,7 @@ class EntityLSHMatcher:
             sorted by similarity (highest first)
         """
         # Create MinHash for query entity
-        shingles = text_to_shingles(entity.name, self.char_ngram_size)
+        shingles = text_to_shingles(entity.name, self.char_ngram_size, self.use_word_shingles)
         query_minhash = create_minhash(shingles, self.num_perm)
 
         # Query LSH for candidates
@@ -235,8 +248,9 @@ class EntityLSHMatcher:
 def build_lsh_index_for_type(
     session: Session,
     entity_type: str,
-    threshold: float = 0.4,
-    only_canonical: bool = True
+    threshold: float = 0.3,
+    only_canonical: bool = True,
+    **lsh_kwargs
 ) -> EntityLSHMatcher:
     """
     Build LSH index for entities of a specific type.
@@ -244,8 +258,9 @@ def build_lsh_index_for_type(
     Args:
         session: SQLAlchemy session
         entity_type: Entity type to index ('person', 'org', 'gpe', etc.)
-        threshold: Minimum Jaccard similarity threshold
+        threshold: Minimum Jaccard similarity threshold (default 0.3)
         only_canonical: Whether to only index CANONICAL entities
+        **lsh_kwargs: Additional arguments for EntityLSHMatcher (num_perm, char_ngram_size, etc.)
 
     Returns:
         EntityLSHMatcher with indexed entities
@@ -265,8 +280,8 @@ def build_lsh_index_for_type(
 
     entities = query.all()
 
-    # Build index
-    matcher = EntityLSHMatcher(threshold=threshold)
+    # Build index with optimized parameters
+    matcher = EntityLSHMatcher(threshold=threshold, **lsh_kwargs)
     matcher.index_entities(entities)
 
     return matcher

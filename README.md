@@ -20,7 +20,8 @@ Este proyecto descarga noticias de diversos medios digitales, extrae su contenid
 ### Procesamiento Avanzado con IA
 - **Clustering semántico**: Agrupa oraciones por similitud temática (UMAP + HDBSCAN)
 - **Flash News automáticas**: LLM genera resúmenes concisos desde clusters core
-- **Named Entity Recognition**: Extrae personas, organizaciones, lugares, etc. con spaCy
+- **Extracción de entidades con OpenAI**: Extrae personas, organizaciones, lugares, eventos, productos y grupos
+- **Análisis profundo de artículos**: OpenAI genera metadatos semánticos para sistema de recomendaciones
 - **Relevancia ajustada por contexto**: Entidades en clusters importantes reciben mayor peso
 - **Embeddings vectoriales**: Permite búsqueda semántica de noticias similares
 
@@ -88,11 +89,6 @@ cp .env.example .env
 # OPENAI_MODEL=gpt-5-nano (opcional, ya es el default)
 ```
 
-5. Descargar modelo de spaCy para español:
-```bash
-uv run python -m spacy download es_core_news_sm
-```
-
 ## Uso
 
 El proyecto incluye una CLI completa construida con Click.
@@ -133,7 +129,7 @@ uv run news article list --pending-enrich          # Pendientes de enriquecer
 # Ver artículo
 uv run news article show <ID>               # Vista previa
 uv run news article show <ID> --full        # Artículo completo
-uv run news article show <ID> --entities    # Ver entidades extraídas (NER)
+uv run news article show <ID> --entities    # Ver entidades extraídas
 uv run news article show <ID> --clusters    # Ver clustering de oraciones
 
 # Eliminar artículo
@@ -178,13 +174,25 @@ uv run news domain add <dominio> --name "Nombre"
 
 # Eliminar fuente
 uv run news domain delete <dominio>
+```
 
-# Procesar artículos (NER con spaCy)
-uv run news domain process start -d <dominio> -t pre_process_articles -s 10
-uv run news domain process list                      # Ver batches
-uv run news domain process list --status completed   # Filtrar por estado
-uv run news domain process show <batch_id>           # Ver detalles de batch
-uv run news domain process show <batch_id> --item <item_id>  # Ver logs de item específico
+### Procesamiento
+
+```bash
+# Paso 1: Clustering semántico
+uv run news process start -d <dominio> -t enrich_article -s 10
+
+# Paso 2: Extracción de entidades con OpenAI
+uv run news process start -d <dominio> -t analyze_article -s 10
+
+# Paso 3: Generación de flash news
+uv run news process start -d <dominio> -t generate_flash_news -s 10
+
+# Ver batches
+uv run news process list
+uv run news process list --status completed
+uv run news process show <batch_id>
+uv run news process show <batch_id> --item <item_id>
 ```
 
 ### Entidades
@@ -193,7 +201,7 @@ uv run news domain process show <batch_id> --item <item_id>  # Ver logs de item 
 # Listar entidades
 uv run news entity list                              # Top 20 por relevancia
 uv run news entity list --limit 50                   # Con límite
-uv run news entity list --type person                # Filtrar por tipo
+uv run news entity list --type PERSON                # Filtrar por tipo
 uv run news entity list --min-relevance 10           # Filtrar por relevancia mínima
 
 # Ver entidad y artículos que la mencionan
@@ -215,7 +223,6 @@ uv run news entity search "Luis"
 ### Extracción y Procesamiento
 - **BeautifulSoup4 + lxml**: Parsing de HTML
 - **Requests**: Descarga HTTP
-- **spaCy**: Named Entity Recognition (NER)
 - **sentence-transformers**: Embeddings semánticos para clustering y búsqueda
 
 ### LLM y Generación de Contenido
@@ -231,8 +238,9 @@ uv run news entity search "Luis"
 - **[Base de Datos](docs/database.md)** - Esquema, operaciones CRUD, deduplicación
 - **[Caché de URLs](docs/cache.md)** - Sistema de caché persistente para desarrollo
 - **[Crear Extractores](docs/extractors.md)** - Guía completa con templates y ejemplos
-- **[Procesamiento](docs/processing.md)** - Sistema de batches y NER con spaCy
-- **[Auto-Clasificación de Entidades](docs/auto-classification.md)** - Sistema automático para detectar aliases y entidades ambiguas
+- **[Procesamiento](docs/processing.md)** - Sistema de batches y clustering semántico
+- **[Auto-Clasificación de Entidades](docs/auto-classification.md)** - Sistema AI para detectar aliases y entidades ambiguas
+- **[Clasificación AI Asistida](docs/ai-assisted-classification.md)** - LSH + comparación pairwise con OpenAI
 
 ## Fuentes Soportadas
 

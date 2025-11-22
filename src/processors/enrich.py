@@ -1,29 +1,18 @@
 """
 Article enrichment module.
-Includes Named Entity Recognition (NER) using spaCy and semantic sentence clustering.
+Handles semantic sentence clustering. Entity extraction is now done by article_analysis.py using OpenAI.
 """
-
-import spacy
 from datetime import datetime
 from sqlalchemy import insert, update, delete
-from db import ProcessingBatch, BatchItem, Article, NamedEntity, EntityType, ArticleCluster, ArticleSentence, ClusterCategory, FlashNews, EntityClassification, EntityOrigin
+from db import ProcessingBatch, BatchItem, Article, NamedEntity, EntityClassification, EntityOrigin, ArticleCluster, ArticleSentence, ClusterCategory
 from db.models import article_entities
 from processors.clustering import extract_sentences, make_embeddings, cluster_article
-from processors.tokenization import populate_entity_tokens
 from collections import defaultdict
 
 
 # Configuration constants for ambiguous entity resolution
 MAX_AMBIGUITY_THRESHOLD = 10  # Entities with more than this many canonical refs are ignored if they couldn't be disambiguated
 MAX_CONTEXTUAL_RESOLUTION_REFS = 10  # Maximum canonical refs to attempt contextual resolution (should be <= MAX_AMBIGUITY_THRESHOLD)
-
-
-# Load spaCy model (Spanish)
-try:
-    nlp = spacy.load("es_core_news_sm")
-except OSError:
-    print("spaCy Spanish model not found. Install with: python -m spacy download es_core_news_sm")
-    nlp = None
 
 
 
@@ -201,7 +190,7 @@ def calculate_local_relevance_with_classification(
         article: Article object
         entity_counts: Dict mapping entity_text -> mention_count
         entity_contexts: Dict mapping entity_text -> [sentences]
-        entities_original: List of (entity_text, entity_type) tuples from NER
+        entities_original: List of (entity_text, entity_type) tuples from entity extraction
         clusters_info: Cluster data for boost calculation
         sentences: List of sentence strings
         session: SQLAlchemy session
@@ -253,10 +242,8 @@ def calculate_local_relevance_with_classification(
             # Update detected_types if needed
             if entity.detected_types is None:
                 entity.detected_types = [entity_type.value]
-                entity.needs_review = 1
             elif entity_type.value not in entity.detected_types:
                 entity.detected_types = entity.detected_types + [entity_type.value]
-                entity.needs_review = 1
 
         # Calculate raw relevance
         raw_relevance = calculate_entity_relevance(article, entity_text, mention_count, total_mentions)
@@ -268,7 +255,7 @@ def calculate_local_relevance_with_classification(
 
         # Determine how to handle based on classification
         should_ignore = False
-        origin = EntityOrigin.NER
+        origin = EntityOrigin.AI_ANALYSIS
 
         if entity.classified_as == EntityClassification.CANONICAL:
             # Normal entity, include in calculation
@@ -503,7 +490,7 @@ def recalculate_article_relevance(article_id, session):
         article_entities.c.context_sentences
     ).filter(
         article_entities.c.article_id == article_id,
-        article_entities.c.origin == EntityOrigin.NER  # Only original NER entities
+        article_entities.c.origin == EntityOrigin.AI_ANALYSIS  # Only original AI-extracted entities
     ).all()
 
     # Build entity_counts and entity_contexts from existing data
@@ -602,7 +589,9 @@ def recalculate_article_relevance(article_id, session):
 
 def process_article(article, batch_item, session):
     """
-    Process a single article: clustering → NER with cluster-based relevance boost.
+    Process a single article: semantic sentence clustering only.
+
+    Entity extraction is now handled by article_analysis.py using OpenAI.
 
     Args:
         article: Article object

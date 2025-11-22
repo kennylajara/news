@@ -1,8 +1,8 @@
 **Título del artículo:** {{ title }}
 
-**Oraciones del cluster CORE (score: {{ cluster_score|round(2) }}):**
+**Oraciones Extraídas:**
 {% for sentence in cluster_sentences %}
 {{ loop.index }}. {{ sentence }}
 {% endfor %}
 
-Genera un resumen narrativo conciso de este cluster.
+Genera un resumen.

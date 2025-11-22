@@ -15,13 +15,21 @@ Usuario → CLI (Click) → get_news.py → Cache DB (opcional) → HTTP Downloa
 - `src/commands/entity.py` - Comandos de gestión de entidades nombradas
 - `src/commands/flash.py` - Comandos de gestión de flash news
 - `src/commands/cache.py` - Comandos de gestión de caché de URLs
+- `src/commands/export.py` - Comandos de exportación de datos (corpus, etc.)
 - `src/get_news.py` - Orquestación principal: descargar → limpiar → extraer → guardar
 - `src/db/database.py` - Fachada de base de datos con operaciones CRUD
 - `src/db/models.py` - Modelos SQLAlchemy (Source, Article, Tag, NamedEntity, ArticleCluster, FlashNews, etc.)
 - `src/db/cache.py` - Base de datos de caché para contenido HTML de URLs
 - `src/extractors/{domain}_com.py` - Extractores de contenido específicos por dominio
-- `src/domain/enrich_article.py` - Procesamiento: clustering semántico + NER
-- `src/domain/generate_flash_news.py` - Generación de resúmenes narrativos con LLM
+- `src/processors/enrich.py` - Enriquecimiento: clustering semántico de oraciones
+- `src/processors/article_analysis.py` - Análisis profundo con OpenAI (extracción de entidades + análisis temático)
+- `src/processors/flash_news.py` - Generación de resúmenes narrativos con LLM
+- `src/processors/clustering.py` - Funciones de clustering semántico (UMAP + HDBSCAN)
+- `src/processors/entity_ai_classification.py` - Clasificación AI de entidades (LSH + pairwise)
+- `src/processors/entity_lsh_matcher.py` - Matching de entidades similares con LSH
+- `src/processors/tokenization.py` - Tokenización de entidades para matching
+- `src/domain/entity_rank.py` - Cálculo de PageRank para entidades
+- `src/domain/calculate_global_relevance.py` - Cálculo de relevancia global
 
 ## Pipeline de Descarga de Artículos
 
@@ -41,11 +49,11 @@ Usuario → CLI (Click) → get_news.py → Cache DB (opcional) → HTTP Downloa
 sources (1:N articles, 1:N domain_processes, 1:N processing_batches)
   ├─ id, domain (unique), name, created_at, updated_at
 
-articles (N:1 source, M:N tags, M:N named_entities, 1:N article_clusters, 1:N article_sentences)
+articles (N:1 source, M:N tags, M:N named_entities, 1:N article_clusters, 1:N article_sentences, 1:1 article_analyses)
   ├─ id, hash (SHA-256, unique), url, source_id
   ├─ title, subtitle, author, published_date, location, category
-  ├─ content (Markdown), enriched_at, cluster_enriched_at
-  ├─ created_at, updated_at
+  ├─ content (Markdown), html_path, cleaned_html_hash
+  ├─ enriched_at, cluster_enriched_at, created_at, updated_at
 
 tags (M:N articles via article_tags)
   ├─ id, name (unique), created_at, updated_at
@@ -53,11 +61,11 @@ tags (M:N articles via article_tags)
 article_tags (tabla de asociación)
   ├─ article_id, tag_id
 
-named_entities (M:N articles via article_entities, M:N canonical refs via entity_canonical_refs, M:N group members via entity_group_members)
-  ├─ id, name (unique), entity_type, detected_types, classified_as, is_group
+named_entities (M:N articles via article_entities, M:N canonical refs via entity_canonical_refs, M:N group members via entity_group_members, 1:N entity_tokens)
+  ├─ id, name, name_length, entity_type, detected_types, classified_as, is_group
   ├─ description, photo_url, article_count, avg_local_relevance, diversity
   ├─ pagerank, global_relevance, last_rank_calculated_at
-  ├─ needs_review, last_review, trend, created_at, updated_at
+  ├─ last_review_type, is_approved, last_review, trend, created_at, updated_at
 
 article_entities (tabla de asociación con metadata)
   ├─ article_id, entity_id, mentions, relevance, origin, context_sentences
@@ -71,6 +79,19 @@ articles_needs_rerank (tabla de tracking)
 entity_group_members (tabla de membresías con tracking temporal)
   ├─ id, group_id, member_id, role, since, until, created_at, updated_at
 
+entity_tokens (N:1 named_entities - índice inverso para matching)
+  ├─ id, entity_id, token, token_normalized, position
+  ├─ is_stopword, seems_like_initials, created_at
+
+entity_pair_comparisons (tracking de comparaciones AI 1v1)
+  ├─ id, entity_a_id, entity_b_id, relationship, confidence
+  ├─ reasoning, created_at, updated_at
+
+entity_classification_suggestions (sugerencias AI para auditoría)
+  ├─ id, entity_id, suggested_classification, suggested_canonical_ids
+  ├─ confidence, reasoning, alternative_classification, alternative_confidence
+  ├─ applied, approved_by_user, created_at
+
 article_clusters (N:1 article, 1:1 flash_news)
   ├─ id, article_id, cluster_label, category, score, size
   ├─ centroid_embedding, sentence_indices, created_at, updated_at
@@ -82,6 +103,15 @@ article_sentences (N:1 article, N:1 article_clusters)
 flash_news (1:1 article_clusters)
   ├─ id, cluster_id (unique), summary, embedding
   ├─ published, created_at, updated_at
+
+article_analyses (1:1 articles - análisis profundo para recomendaciones)
+  ├─ id, article_id (unique), key_concepts, semantic_relations, narrative_frames
+  ├─ editorial_tone, style_descriptors, controversy_score, political_bias
+  ├─ has_named_sources, has_data_or_statistics, has_multiple_perspectives, quality_score
+  ├─ content_format, temporal_relevance, audience_education, target_age_range
+  ├─ target_professions, required_interests, relevant_industries
+  ├─ geographic_scope, cultural_context, voices_represented, source_diversity_score
+  ├─ created_at, updated_at
 
 domain_processes (N:1 source)
   ├─ source_id, process_type, last_processed_at, created_at, updated_at
@@ -168,15 +198,25 @@ src/
 │   ├── cache.py      # Comandos de caché (stats, list-domains, clear)
 │   ├── domain.py     # Comandos de dominios (list, stats)
 │   ├── process.py    # Comandos de procesamiento (start, list, show)
-│   ├── entity.py     # Comandos de entidades (list, show, stats)
-│   └── flash.py      # Comandos de flash news (list, show, publish, stats)
+│   ├── entity.py     # Comandos de entidades (list, show, stats, ai-classify)
+│   ├── flash.py      # Comandos de flash news (list, show, publish, stats)
+│   └── export.py     # Comandos de exportación (corpus)
 ├── db/               # Modelos de base de datos y operaciones
 │   ├── models.py     # Modelos SQLAlchemy (news.db)
 │   ├── database.py   # Fachada CRUD (news.db)
-│   └── cache.py      # Base de datos de caché (cache.db)
-├── domain/           # Lógica de procesamiento de dominio
-│   ├── enrich_article.py       # Clustering + NER
-│   └── generate_flash_news.py  # Generación LLM de resúmenes
+│   ├── cache.py      # Base de datos de caché (cache.db)
+│   └── export.py     # Funciones de exportación de datos
+├── processors/       # Procesamiento de artículos y entidades
+│   ├── enrich.py                    # Enriquecimiento: clustering semántico
+│   ├── article_analysis.py          # Análisis profundo con OpenAI
+│   ├── flash_news.py                # Generación LLM de resúmenes
+│   ├── clustering.py                # UMAP + HDBSCAN clustering
+│   ├── entity_ai_classification.py  # Clasificación AI de entidades
+│   ├── entity_lsh_matcher.py        # LSH matching de entidades
+│   └── tokenization.py              # Tokenización de entidades
+├── domain/           # Lógica de negocio de dominio
+│   ├── entity_rank.py              # PageRank para entidades
+│   └── calculate_global_relevance.py  # Cálculo de relevancia global
 ├── llm/              # Integración con LLMs
 │   ├── prompts/      # Prompts Jinja2 y schemas Pydantic
 │   └── openai_structured_output.py  # Wrapper genérico
