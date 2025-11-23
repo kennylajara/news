@@ -4,7 +4,20 @@
 {% if published_date %}**Fecha de publicación:** {{ published_date }}{% endif %}
 {% if category %}**Categoría editorial:** {{ category }}{% endif %}
 
+---
+
+{% if categorized_content %}
+{{ categorized_content.annotated_content }}
+
+{% if categorized_content.footnotes %}
+---
+
+{% for ref_num, sentence in categorized_content.footnotes %}[^{{ ref_num }}]: {{ sentence }}
+{% endfor %}
+{% endif %}
+{% else %}
 {{ content }}
+{% endif %}
 </article>
 
 Analiza este artículo según las dimensiones especificadas y genera el análisis estructurado completo.

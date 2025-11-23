@@ -7,12 +7,81 @@ from datetime import datetime
 from db import ProcessingBatch, BatchItem, Article, ArticleAnalysis
 
 
+def categorize_sentences_by_cluster(clusters_info, sentences, original_content):
+    """
+    Categorize sentences by cluster importance and prepare annotated content.
+    Preserves original Markdown formatting (paragraphs, headings, etc).
+
+    Args:
+        clusters_info: List of cluster dicts with 'category' and 'indices'
+        sentences: List of sentence strings
+        original_content: Original article content with Markdown formatting
+
+    Returns:
+        dict: Categorized content with formatting preserved
+            {
+                'annotated_content': str,  # Content with <strong> tags and [^N] refs
+                'footnotes': [(ref_num, sentence), ...],  # FILLER sentences as footnotes
+                'stats': {'core': count, 'secondary': count, 'filler': count, ...}
+            }
+    """
+    if not clusters_info or not sentences or not original_content:
+        return None
+
+    # Map sentence indices to categories
+    sentence_categories = {}
+    for cluster in clusters_info:
+        category = cluster['category']
+        for idx in cluster['indices']:
+            sentence_categories[idx] = category
+
+    # Build replacement mapping and footnotes
+    footnotes = []
+    stats = {'core': 0, 'secondary': 0, 'filler': 0, 'total': len(sentences)}
+    footnote_counter = 1
+
+    # Start with original content
+    annotated_content = original_content
+
+    # Process sentences in reverse order to avoid offset issues
+    for idx in range(len(sentences) - 1, -1, -1):
+        sentence = sentences[idx]
+        category = sentence_categories.get(idx, 'filler')
+
+        # Find sentence in content (escape special regex chars)
+        import re
+        escaped_sentence = re.escape(sentence)
+
+        if category == 'core':
+            # Wrap in <strong> tags
+            replacement = f"<strong>{sentence}</strong>"
+            annotated_content = re.sub(escaped_sentence, replacement, annotated_content, count=1)
+            stats['core'] += 1
+        elif category == 'secondary':
+            # Keep as-is
+            stats['secondary'] += 1
+        else:  # filler - replace with footnote reference
+            replacement = f"[^{footnote_counter}]"
+            annotated_content = re.sub(escaped_sentence, replacement, annotated_content, count=1)
+            footnotes.insert(0, (footnote_counter, sentence))  # Insert at beginning to maintain order
+            footnote_counter += 1
+            stats['filler'] += 1
+
+    stats['main_content'] = stats['core'] + stats['secondary']
+
+    return {
+        'annotated_content': annotated_content,
+        'footnotes': footnotes,
+        'stats': stats
+    }
+
+
 def process_article_analysis(article, batch_item, session):
     """
     Generate deep analysis for an article.
 
     Args:
-        article: Article object (must have enriched_at set for entity context)
+        article: Article object
         batch_item: BatchItem object for tracking
         session: Database session
 
@@ -47,11 +116,68 @@ def process_article_analysis(article, batch_item, session):
             session.flush()
             return stats
 
+        # AUTO-CLUSTERING: Execute clustering if not done yet
+        if not article.clusterized_at:
+            logs.append("No clusters found, running clustering first...")
+            try:
+                from processors.enrich import process_article as enrich_process_article
+                from db import BatchItem as TempBatchItem
+
+                # Create temporary batch item for clustering
+                temp_batch_item = TempBatchItem(
+                    batch_id=batch_item.batch_id,
+                    article_id=article.id,
+                    status='pending'
+                )
+                session.add(temp_batch_item)
+                session.flush()
+
+                # Run clustering
+                enrich_process_article(article, temp_batch_item, session)
+                logs.append("✓ Clustering completed successfully")
+                stats['auto_clustered'] = 1
+
+            except Exception as e:
+                logs.append(f"⚠ Clustering failed: {e}")
+                logs.append("Continuing analysis without clusters...")
+                stats['auto_clustered'] = 0
+
         # Import LLM client
         try:
             from llm.openai_client import openai_structured_output
         except ImportError as e:
             raise ImportError(f"Could not import OpenAI client: {e}")
+
+        # CONTENT CATEGORIZATION: Load clusters and categorize sentences
+        from db import ArticleCluster, ArticleSentence
+
+        categorized_content = None
+
+        if article.clusterized_at:
+            # Load clusters
+            clusters = session.query(ArticleCluster).filter_by(article_id=article.id).all()
+            clusters_info = []
+            for cluster in clusters:
+                clusters_info.append({
+                    'label': cluster.cluster_label,
+                    'category': cluster.category.value,
+                    'score': cluster.score,
+                    'size': cluster.size,
+                    'indices': cluster.sentence_indices or []
+                })
+
+            # Load sentences
+            article_sentences = session.query(ArticleSentence).filter_by(article_id=article.id)\
+                .order_by(ArticleSentence.sentence_index).all()
+            sentences = [s.sentence_text for s in article_sentences]
+
+            # Categorize sentences for template
+            categorized_content = categorize_sentences_by_cluster(clusters_info, sentences, article.content)
+
+            if categorized_content:
+                stats_data = categorized_content['stats']
+                logs.append(f"Content structured: {stats_data['core']} CORE, {stats_data['secondary']} SECONDARY, {stats_data['filler']} CONTEXT")
+                logs.append(f"Main content: {stats_data['main_content']}/{stats_data['total']} sentences")
 
         # Prepare data for LLM (excluding source/author to avoid bias)
         llm_data = {
@@ -59,7 +185,8 @@ def process_article_analysis(article, batch_item, session):
             'subtitle': article.subtitle or '',
             'published_date': article.published_date.strftime('%Y-%m-%d') if article.published_date else '',
             'category': article.category or '',
-            'content': article.content
+            'content': article.content,  # Full content (fallback)
+            'categorized_content': categorized_content  # Categorized sentences for template
         }
 
         logs.append(f"Calling LLM for analysis...")
@@ -67,50 +194,54 @@ def process_article_analysis(article, batch_item, session):
         # Call OpenAI for structured analysis
         result = openai_structured_output('article_analysis', llm_data)
 
-        # Process extracted entities
+        # Process extracted entities using sophisticated relevance calculation
         from db import NamedEntity, EntityType, EntityOrigin
         from sqlalchemy.dialects.sqlite import insert
         from db.models import article_entities
+        from processors.enrich import calculate_local_relevance_with_classification
 
+        # Count entity mentions
         entity_counts = {}
+        entity_contexts = {}  # Empty for now, could be populated from result if needed
+        entities_original = []
+
         for ent in result.entities:
             entity_counts[ent.text] = entity_counts.get(ent.text, 0) + 1
+            entities_original.append((ent.text, EntityType[ent.type.value]))
 
-        # Save entities to database
-        for ent in result.entities:
-            # Get or create entity
-            entity = session.query(NamedEntity).filter_by(
-                name=ent.text,
-                entity_type=EntityType[ent.type.value]
-            ).first()
+        # Reuse clusters_info and sentences from filtering (already loaded if clusterized)
+        # If not clusterized, these will be empty lists (handled gracefully)
+        if not article.clusterized_at:
+            clusters_info = []
+            sentences = []
 
-            if not entity:
-                entity = NamedEntity(
-                    name=ent.text,
-                    name_length=len(ent.text),
-                    entity_type=EntityType[ent.type.value],
-                    is_approved=1,
-                    last_review_type='ai-assisted'
-                )
-                session.add(entity)
-                session.flush()
+        # Calculate relevances using sophisticated algorithm
+        final_relevances = calculate_local_relevance_with_classification(
+            article=article,
+            entity_counts=entity_counts,
+            entity_contexts=entity_contexts,
+            entities_original=entities_original,
+            clusters_info=clusters_info,
+            sentences=sentences,
+            session=session
+        )
 
-            # Insert into article_entities with relevance based on mention count
-            mentions = entity_counts[ent.text]
-            relevance = min(mentions / 10.0, 1.0)  # Simple relevance: mentions / 10, capped at 1.0
-
+        # Save to database
+        for data in final_relevances:
             stmt = insert(article_entities).values(
                 article_id=article.id,
-                entity_id=entity.id,
-                mentions=mentions,
-                relevance=relevance,
-                origin=EntityOrigin.AI_ANALYSIS,
-                context_sentences=[]  # Could be populated if needed
-            ).on_conflict_do_nothing()  # Skip if already exists
+                entity_id=data['entity_id'],
+                mentions=data['mentions'],
+                relevance=data['relevance'],
+                origin=data['origin'],
+                context_sentences=data.get('context_sentences', [])
+            ).on_conflict_do_nothing()
             session.execute(stmt)
 
-        stats['entities_extracted'] = len(set(ent.text for ent in result.entities))
+        stats['entities_extracted'] = len(final_relevances)
         logs.append(f"Extracted {stats['entities_extracted']} unique entities")
+        if clusters_info:
+            logs.append(f"Applied cluster boost to {len(clusters_info)} clusters")
 
         # Create ArticleAnalysis record
         analysis = ArticleAnalysis(

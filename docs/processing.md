@@ -8,7 +8,7 @@ El sistema de procesamiento por lotes permite ejecutar diferentes tipos de proce
 
 ### Enriquecimiento de Artículos (`enrich_article`)
 
-Proceso base que incluye **solo clustering semántico**. La extracción de entidades se hace ahora en `analyze_article` con OpenAI.
+Proceso base que realiza clustering semántico de oraciones. La extracción de entidades se hace en `analyze_article` con OpenAI.
 
 **Características**:
 - **Clustering semántico** de oraciones con clasificación (core, secondary, filler)
@@ -18,8 +18,6 @@ Proceso base que incluye **solo clustering semántico**. La extracción de entid
 - Marca artículo como `cluster_enriched_at` y `enriched_at`
 - Guarda logs detallados del procesamiento
 - **Performance**: ~2-3 segundos por artículo
-
-**Nota**: La extracción de entidades ahora se hace en `analyze_article` con OpenAI para mayor precisión.
 
 ### Análisis Profundo de Artículos (`analyze_article`)
 

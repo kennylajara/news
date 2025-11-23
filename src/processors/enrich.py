@@ -1,12 +1,13 @@
 """
 Article enrichment module.
-Handles semantic sentence clustering. Entity extraction is now done by article_analysis.py using OpenAI.
+Handles semantic sentence clustering.
 """
 from datetime import datetime
 from sqlalchemy import insert, update, delete
 from db import ProcessingBatch, BatchItem, Article, NamedEntity, EntityClassification, EntityOrigin, ArticleCluster, ArticleSentence, ClusterCategory
 from db.models import article_entities
 from processors.clustering import extract_sentences, make_embeddings, cluster_article
+from processors.tokenization import populate_entity_tokens
 from collections import defaultdict
 
 
@@ -517,7 +518,7 @@ def recalculate_article_relevance(article_id, session):
     clusters_info = []
     sentences = []
 
-    if article.cluster_enriched_at:
+    if article.clusterized_at:
         # Load clusters and sentences
         clusters = session.query(ArticleCluster).filter_by(article_id=article_id).all()
 
@@ -589,9 +590,7 @@ def recalculate_article_relevance(article_id, session):
 
 def process_article(article, batch_item, session):
     """
-    Process a single article: semantic sentence clustering only.
-
-    Entity extraction is now handled by article_analysis.py using OpenAI.
+    Process a single article: semantic sentence clustering.
 
     Args:
         article: Article object
@@ -605,9 +604,7 @@ def process_article(article, batch_item, session):
     stats = {
         'sentences_extracted': 0,
         'clusters_found': 0,
-        'entities_found': 0,
-        'entities_new': 0,
-        'entities_existing': 0,
+        'entities_recalculated': 0,
         'processing_time': 0
     }
 
@@ -667,106 +664,33 @@ def process_article(article, batch_item, session):
                         )
                         session.add(sentence)
 
-            # Mark as cluster-enriched
-            article.cluster_enriched_at = datetime.utcnow()
+            # Mark as clusterized
+            article.clusterized_at = datetime.utcnow()
             logs.append("Clustering complete")
-
-            # ========== PHASE 1.1: CLUSTER SUMMARIZATION (MOVED TO flash_news.py) ==========
-            # NOTE: Flash news generation has been moved to a separate process: generate_flash_news
-            # Run: news process start -d <domain> -t generate_flash_news
-            # This code is kept commented as reference
-            #
-            # logs.append("Phase 1.1: Generating flash news from core clusters...")
-            #
-            # core_clusters = [c for c in clusters_info if c['category'] == 'core']
-            # stats['flash_news_generated'] = 0
-            #
-            # if core_clusters:
-            #     logs.append(f"Found {len(core_clusters)} core clusters to summarize")
-            #
-            #     try:
-            #         from llm.openai_client import openai_structured_output
-            #
-            #         for cluster_data in core_clusters:
-            #             try:
-            #                 # Find the cluster object we just created
-            #                 cluster = session.query(ArticleCluster).filter_by(
-            #                     article_id=article.id,
-            #                     cluster_label=int(cluster_data['label'])
-            #                 ).first()
-            #
-            #                 if not cluster:
-            #                     logs.append(f"  Warning: Could not find cluster {cluster_data['label']} in DB")
-            #                     continue
-            #
-            #                 # Check if flash news already exists for this cluster
-            #                 existing_flash = session.query(FlashNews).filter_by(cluster_id=cluster.id).first()
-            #                 if existing_flash:
-            #                     logs.append(f"  Skipping cluster {cluster_data['label']}: flash news already exists")
-            #                     continue
-            #
-            #                 # Get sentences for this cluster
-            #                 cluster_sentences = [sentences[idx] for idx in cluster_data['indices'] if idx < len(sentences)]
-            #
-            #                 # Prepare data for LLM
-            #                 llm_data = {
-            #                     'title': article.title,
-            #                     'cluster_sentences': cluster_sentences,
-            #                     'cluster_score': cluster_data['score']
-            #                 }
-            #
-            #                 # Call OpenAI for structured summarization
-            #                 result = openai_structured_output('core_cluster_summarization', llm_data)
-            #                 summary_text = result.summary
-            #
-            #                 # Generate embedding for the summary
-            #                 summary_embedding = make_embeddings([summary_text])
-            #                 summary_embedding_list = summary_embedding[0].tolist()
-            #
-            #                 # Create FlashNews record
-            #                 flash_news = FlashNews(
-            #                     cluster_id=cluster.id,
-            #                     summary=summary_text,
-            #                     embedding=summary_embedding_list,
-            #                     published=0
-            #                 )
-            #                 session.add(flash_news)
-            #                 session.flush()
-            #
-            #                 stats['flash_news_generated'] += 1
-            #                 logs.append(f"  ✓ Cluster {cluster_data['label']}: Generated flash news (ID: {flash_news.id})")
-            #                 logs.append(f"    Summary: {summary_text[:100]}...")
-            #
-            #             except Exception as cluster_error:
-            #                 # Log error but continue processing other clusters
-            #                 logs.append(f"  ✗ Failed to generate flash news for cluster {cluster_data['label']}: {str(cluster_error)}")
-            #                 continue
-            #
-            #         logs.append(f"Generated {stats['flash_news_generated']} flash news from {len(core_clusters)} core clusters")
-            #
-            #     except ImportError as e:
-            #         logs.append(f"Warning: Could not import OpenAI client, skipping summarization: {e}")
-            #     except Exception as e:
-            #         logs.append(f"Warning: Error during cluster summarization: {e}")
-            #
-            # else:
-            #     logs.append("No core clusters found, skipping flash news generation")
 
         else:
             logs.append("No sentences found, skipping clustering")
 
-        # ========== PHASE 2: NER - Now done by article_analysis ==========
-        logs.append("Phase 2: Entity extraction now done by article_analysis process")
-        logs.append("Run: news process start -d <domain> -t analyze_article")
+        # ========== RECALCULATE ENTITY RELEVANCE IF CLUSTERS GENERATED ==========
+        # If clusters were generated and article has entities, recalculate relevance to apply cluster boost
+        if clusters_info and article.clusterized_at:
+            # Check if article has entities from previous analysis
+            existing_entities = session.query(article_entities).filter(
+                article_entities.c.article_id == article.id,
+                article_entities.c.origin == EntityOrigin.AI_ANALYSIS
+            ).count()
 
-        stats['entities_found'] = 0
-        stats['entities_new'] = 0
-        stats['entities_existing'] = 0
+            if existing_entities > 0:
+                logs.append(f"Recalculating entity relevance with cluster boost ({existing_entities} entities)...")
+                try:
+                    recalc_stats = recalculate_article_relevance(article.id, session)
+                    logs.append(f"  ✓ Updated {recalc_stats['entities_processed']} entities with cluster boost")
+                    stats['entities_recalculated'] = recalc_stats['entities_processed']
+                except Exception as e:
+                    logs.append(f"  ⚠ Failed to recalculate relevance: {str(e)}")
+                    # Don't fail the whole process, just log the warning
 
-        # ========== PHASE 3: UPDATE DB RECORDS ==========
-        # Mark article as enriched
-        article.enriched_at = datetime.utcnow()
-
+        # ========== UPDATE DB RECORDS ==========
         # Update batch item
         batch_item.status = 'completed'
         batch_item.completed_at = datetime.utcnow()
@@ -817,9 +741,6 @@ def process_batch(batch_id, session):
     items = session.query(BatchItem).filter_by(batch_id=batch_id, status='pending').all()
 
     total_stats = {
-        'entities_found': 0,
-        'entities_new': 0,
-        'entities_existing': 0,
         'total_processing_time': 0
     }
 
@@ -843,7 +764,7 @@ def process_batch(batch_id, session):
             batch.successful_items += 1
             batch.processed_items += 1
 
-            print(f"  ✓ Processed article {article.id}: {stats['entities_found']} entities found")
+            print(f"  ✓ Processed article {article.id}")
 
         except Exception as e:
             batch.failed_items += 1
@@ -862,8 +783,5 @@ def process_batch(batch_id, session):
     print(f"  Total items: {batch.total_items}")
     print(f"  Successful: {batch.successful_items}")
     print(f"  Failed: {batch.failed_items}")
-    print(f"  Total entities found: {total_stats['entities_found']}")
-    print(f"  New entities: {total_stats['entities_new']}")
-    print(f"  Existing entities: {total_stats['entities_existing']}")
 
     return batch.failed_items == 0

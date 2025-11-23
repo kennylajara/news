@@ -187,7 +187,7 @@ def stats(clusters):
 
         for source in sorted(sources, key=lambda s: len(s.articles), reverse=True):
             count = len(source.articles)
-            enriched = len([a for a in source.articles if a.enriched_at])
+            enriched = len([a for a in source.articles if a.clusterized_at])
             pending = count - enriched
 
             total_articles += count
@@ -208,14 +208,14 @@ def stats(clusters):
             click.echo(click.style("\n=== Cluster Statistics ===\n", fg="cyan", bold=True))
 
             # Count articles with clusters
-            cluster_enriched_articles = session.query(Article).filter(
-                Article.cluster_enriched_at.isnot(None)
+            clusterized_articles = session.query(Article).filter(
+                Article.clusterized_at.isnot(None)
             ).count()
 
-            click.echo(f"{'Articles with clusters':30} {click.style(str(cluster_enriched_articles), fg='green'):5}")
-            click.echo(f"{'Pending clustering':30} {click.style(str(total_articles - cluster_enriched_articles), fg='yellow'):5}")
+            click.echo(f"{'Articles with clusters':30} {click.style(str(clusterized_articles), fg='green'):5}")
+            click.echo(f"{'Pending clustering':30} {click.style(str(total_articles - clusterized_articles), fg='yellow'):5}")
 
-            if cluster_enriched_articles > 0:
+            if clusterized_articles > 0:
                 # Total clusters
                 total_clusters = session.query(ArticleCluster).count()
 
@@ -231,7 +231,7 @@ def stats(clusters):
                 ).count()
 
                 # Average clusters per article
-                avg_clusters = total_clusters / cluster_enriched_articles
+                avg_clusters = total_clusters / clusterized_articles
 
                 click.echo(f"\n{'Total clusters':30} {total_clusters:5}")
                 click.echo(f"{'Avg clusters/article':30} {avg_clusters:5.1f}")

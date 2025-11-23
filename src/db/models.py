@@ -163,8 +163,7 @@ class Article(Base):
     html_path = Column(String(500))
     cleaned_html_hash = Column(String(64), nullable=True)  # SHA-256 hash of cleaned HTML (for change detection)
 
-    enriched_at = Column(DateTime, nullable=True, index=True)
-    cluster_enriched_at = Column(DateTime, nullable=True, index=True)
+    clusterized_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
 
@@ -208,7 +207,7 @@ class NamedEntity(Base):
     name = Column(String(255), nullable=False, index=True)
     name_length = Column(Integer, nullable=False, index=True)  # len(name) - for ordering by length
     entity_type = Column(Enum(EntityType), nullable=False, index=True)
-    detected_types = Column(JSON, nullable=True)  # List of EntityType values spaCy has detected for this entity
+    detected_types = Column(JSON, nullable=True)  # List of EntityType values detected for this entity
 
     # Entity classification for disambiguation
     classified_as = Column(Enum(EntityClassification), nullable=False, default=EntityClassification.CANONICAL, index=True)

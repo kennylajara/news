@@ -13,7 +13,7 @@ def process_flash_news_article(article, batch_item, session):
     Generate flash news for all core clusters in an article that don't have flash news yet.
 
     Args:
-        article: Article object (must have cluster_enriched_at set)
+        article: Article object (must have clusterized_at set)
         batch_item: BatchItem object for tracking
         session: Database session
 
@@ -37,7 +37,7 @@ def process_flash_news_article(article, batch_item, session):
         logs.append(f"Processing flash news for article {article.id}: {article.title[:50]}...")
 
         # Validate article has clusters
-        if not article.cluster_enriched_at:
+        if not article.clusterized_at:
             raise ValueError(f"Article {article.id} has not been cluster-enriched yet")
 
         # Get core clusters for this article

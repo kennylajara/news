@@ -381,7 +381,7 @@ context = {
 - La entidad queda clasificada (ALIAS, CANONICAL, etc.) y puede ser usada por el sistema
 - Se marca como `last_review_type='ai-assisted'`
 - Campo `applied=1` en la tabla de sugerencias
-- **Ejemplo:** "Luis" pasa de CANONICAL → ALIAS de "Luis Abinader" **ahora mismo**
+- **Ejemplo:** "Luis" pasa de CANONICAL → ALIAS de "Luis Abinader"
 
 ### GUARDAR SUGERENCIA (confianza <70%)
 - **NO cambia** la clasificación de la entidad

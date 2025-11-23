@@ -337,7 +337,7 @@ def rerank(domain, damping, threshold, time_decay, show_stats):
         click.echo(click.style("🔄 Calculating global entity relevance...\n", fg="cyan", bold=True))
 
         # Step 1: Count total articles and entities
-        total_articles_query = session.query(Article).filter(Article.enriched_at.isnot(None))
+        total_articles_query = session.query(Article).filter(Article.clusterized_at.isnot(None))
         if domain:
             from db.models import Source
             total_articles_query = total_articles_query.join(Article.source).filter(Source.domain == domain)
@@ -943,8 +943,8 @@ def classify_not_entity(entity_id):
     """
     Mark entity as NOT_AN_ENTITY (false positive).
 
-    Use this for entities that spaCy incorrectly detected as entities
-    (e.g., "según" classified as PERSON).
+    Use this for entities that were incorrectly detected as entities
+    (e.g., common words misclassified as PERSON).
 
     Examples:
         news entity classify-not-entity 123

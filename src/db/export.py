@@ -122,7 +122,7 @@ def export_articles_to_corpus(
         query = query.filter(Source.domain == source_domain)
 
     if skip_enriched:
-        query = query.filter(Article.enriched_at.is_(None))
+        query = query.filter(Article.clusterized_at.is_(None))
 
     # Order by published_date descending (most recent first)
     query = query.order_by(Article.published_date.desc())

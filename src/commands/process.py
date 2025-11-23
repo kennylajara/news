@@ -54,49 +54,48 @@ def start(domain, process_type, size, article_id):
             process_type_enum = ProcessType.ENRICH_ARTICLE
 
             if not article_id:
-                # Get unenriched articles (enriched_at is NULL)
+                # Get articles without clustering (clusterized_at is NULL)
                 articles_to_process = (
                     session.query(Article)
                     .filter(Article.source_id == source.id)
-                    .filter(Article.enriched_at.is_(None))
+                    .filter(Article.clusterized_at.is_(None))
                     .order_by(Article.created_at.desc())
                     .limit(size)
                     .all()
                 )
-                articles_label = "unenriched articles"
+                articles_label = "non-clusterized articles"
 
         elif process_type == 'generate_flash_news':
             process_type_enum = ProcessType.GENERATE_FLASH_NEWS
 
             if not article_id:
-                # Get articles with clusters (cluster_enriched_at is NOT NULL)
+                # Get articles with clusters (clusterized_at is NOT NULL)
                 articles_to_process = (
                     session.query(Article)
                     .filter(Article.source_id == source.id)
-                    .filter(Article.cluster_enriched_at.isnot(None))
+                    .filter(Article.clusterized_at.isnot(None))
                     .order_by(Article.created_at.desc())
                     .limit(size)
                     .all()
                 )
-                articles_label = "articles with clusters"
+                articles_label = "clusterized articles"
 
         elif process_type == 'analyze_article':
             process_type_enum = ProcessType.ANALYZE_ARTICLE
             from db import ArticleAnalysis
 
             if not article_id:
-                # Get enriched articles without analysis
+                # Get articles without analysis (no dependency on clustering)
                 articles_to_process = (
                     session.query(Article)
                     .filter(Article.source_id == source.id)
-                    .filter(Article.enriched_at.isnot(None))
                     .outerjoin(ArticleAnalysis, Article.id == ArticleAnalysis.article_id)
                     .filter(ArticleAnalysis.id.is_(None))
                     .order_by(Article.created_at.desc())
                     .limit(size)
                     .all()
                 )
-                articles_label = "enriched articles without analysis"
+                articles_label = "articles without analysis"
 
         else:
             click.echo(click.style(f"✗ Unknown process type: {process_type}", fg="red"))

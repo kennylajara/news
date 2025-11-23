@@ -53,7 +53,7 @@ articles (N:1 source, M:N tags, M:N named_entities, 1:N article_clusters, 1:N ar
   ├─ id, hash (SHA-256, unique), url, source_id
   ├─ title, subtitle, author, published_date, location, category
   ├─ content (Markdown), html_path, cleaned_html_hash
-  ├─ enriched_at, cluster_enriched_at, created_at, updated_at
+  ├─ clusterized_at, created_at, updated_at
 
 tags (M:N articles via article_tags)
   ├─ id, name (unique), created_at, updated_at

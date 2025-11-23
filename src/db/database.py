@@ -222,8 +222,7 @@ class Database:
 
             # Only reset enrichment status if content actually changed
             if content_changed:
-                existing.enriched_at = None
-                existing.cluster_enriched_at = None
+                existing.clusterized_at = None
 
             # Update tags: clear existing and add new ones
             existing.tags.clear()

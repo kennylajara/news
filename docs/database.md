@@ -71,8 +71,7 @@ Artículos de noticias completos con metadata.
 | content | TEXT | NOT NULL | Contenido en formato Markdown |
 | html_path | VARCHAR(500) | NULLABLE | Ruta al archivo HTML guardado (si existe) |
 | cleaned_html_hash | VARCHAR(64) | NULLABLE | SHA-256 del HTML limpio (detección de cambios) |
-| enriched_at | DATETIME | NULLABLE, INDEX | Fecha de enriquecimiento (NULL = no enriquecido) |
-| cluster_enriched_at | DATETIME | NULLABLE, INDEX | Fecha de clustering semántico (NULL = sin clustering) |
+| clusterized_at | DATETIME | NULLABLE, INDEX | Fecha de clustering semántico (NULL = sin clustering) |
 | created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Fecha de creación en DB |
 | updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
 
@@ -184,7 +183,7 @@ Entidades nombradas extraídas de artículos mediante NER (Named Entity Recognit
 | name | VARCHAR(255) | NOT NULL, INDEX | Nombre de la entidad |
 | name_length | INTEGER | NOT NULL, INDEX | Longitud del nombre (para ordenamiento) |
 | entity_type | ENUM | NOT NULL, INDEX | Tipo de entidad |
-| detected_types | JSON | NULLABLE | Lista de tipos detectados por spaCy para esta entidad |
+| detected_types | JSON | NULLABLE | Lista de tipos detectados para esta entidad |
 | classified_as | ENUM | NOT NULL, DEFAULT 'canonical', INDEX | Clasificación para desambiguación |
 | is_group | INTEGER | NOT NULL, DEFAULT 0, INDEX | Flag de grupo (0=no, 1=yes) - solo para CANONICAL |
 | description | TEXT | NULLABLE | Descripción de la entidad |
@@ -216,7 +215,7 @@ Entidades nombradas extraídas de artículos mediante NER (Named Entity Recognit
 - `PRODUCT`: Productos (objetos, vehículos, servicios, software)
 - `NORP`: Nacionalidades, grupos religiosos o políticos
 
-**Nota**: Los tipos están en mayúsculas según la nomenclatura de OpenAI. El sistema de extracción anterior (spaCy) usaba 18 tipos, pero fue removido en favor de extracción AI más precisa.
+**Nota**: Los tipos están en mayúsculas siguiendo las convenciones de spaCy para permitir futura implementación con fine-tuning.
 
 **Campos clave**:
 - `name_length`: Longitud del nombre, usado para ordenar entidades por especificidad (nombres más largos = más específicos)
@@ -730,16 +729,16 @@ Este método implementa el patrón "upsert" (create or update) para artículos:
 
 **Detección inteligente de cambios de contenido:**
 - Compara el `cleaned_html_hash` (SHA-256 del HTML limpio) entre el artículo existente y el nuevo
-- Si el hash **es diferente** o no existe: resetea `enriched_at` y `cluster_enriched_at` (requiere re-procesamiento)
-- Si el hash **es idéntico**: preserva el estado de enriquecimiento (evita re-procesamiento innecesario)
-- Se puede forzar el reseteo con `force_reprocess=True` (útil al mejorar algoritmos de enriquecimiento: NER, clustering, ...)
+- Si el hash **es diferente** o no existe: resetea `clusterized_at` (requiere re-procesamiento)
+- Si el hash **es idéntico**: preserva el estado de clustering (evita re-procesamiento innecesario)
+- Se puede forzar el reseteo con `force_reprocess=True` (útil al mejorar algoritmos de clustering)
 
 **Ventajas sobre `save_article()`:**
 - ✅ No falla si el artículo ya existe (idempotente)
 - ✅ Permite re-procesar artículos sin errores
 - ✅ Útil para actualizar contenido que cambió en el sitio
 - ✅ Indica si fue creación o actualización
-- ✅ Evita re-enriquecimiento innecesario cuando el contenido no cambió
+- ✅ Evita re-procesamiento innecesario cuando el contenido no cambió
 
 **Cuándo usar cada uno:**
 
@@ -768,20 +767,20 @@ article_data = {
 article, was_updated = db.save_or_update_article(session, article_data, "example.com")
 print(f"Created: {article.id}")  # was_updated = False
 
-# Segunda vez (mismo hash/URL, mismo contenido): actualiza pero preserva enriquecimiento
+# Segunda vez (mismo hash/URL, mismo contenido): actualiza pero preserva clustering
 article, was_updated = db.save_or_update_article(session, article_data, "example.com")
-print(f"Updated: {article.id}")  # was_updated = True, enriched_at preservado
+print(f"Updated: {article.id}")  # was_updated = True, clusterized_at preservado
 
-# Tercera vez (contenido cambió): actualiza y resetea enriquecimiento
+# Tercera vez (contenido cambió): actualiza y resetea clustering
 article_data["_metadata"]["cleaned_html_hash"] = "xyz999..."  # Hash diferente
 article, was_updated = db.save_or_update_article(session, article_data, "example.com")
-print(f"Updated: {article.id}")  # enriched_at = None (requiere re-procesamiento)
+print(f"Updated: {article.id}")  # clusterized_at = None (requiere re-procesamiento)
 
 # Forzar reseteo (útil al mejorar algoritmos)
 article, was_updated = db.save_or_update_article(
     session, article_data, "example.com", force_reprocess=True
 )
-# enriched_at = None (incluso si el contenido no cambió)
+# clusterized_at = None (incluso si el contenido no cambió)
 ```
 
 **Campos actualizados:**
@@ -791,7 +790,7 @@ article, was_updated = db.save_or_update_article(
 - `updated_at` (automático)
 
 **Campos actualizados condicionalmente:**
-- `enriched_at`, `cluster_enriched_at`: se resetean a NULL solo si:
+- `clusterized_at`: se resetea a NULL solo si:
   - El contenido cambió (hashes diferentes), **O**
   - Se especificó `force_reprocess=True`
 

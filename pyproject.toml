@@ -10,7 +10,6 @@ dependencies = [
     "lxml>=6.0.2",
     "sqlalchemy>=2.0.44",
     "click==8.3.0",
-    "spacy==3.8.9",
     "sentence-transformers==5.1.2",
     "scikit-learn==1.7.2",
     "numpy==2.3.4",

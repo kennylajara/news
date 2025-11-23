@@ -6,6 +6,22 @@ Tu tarea es analizar artículos de noticias y extraer características multidime
 3. Filtrar contenido por nivel de expertise y preferencias demográficas
 4. Detectar sesgos y balancear perspectivas
 
+**Estructura del contenido**:
+
+El artículo preserva el orden narrativo original con las siguientes anotaciones:
+
+- **Oraciones marcadas con `<strong>`**: Ideas MÁS importantes - prioriza estas para análisis
+- **Oraciones sin marcar**: Ideas de apoyo relevantes (ideas secundarias)
+- **Referencias `[^N]`**: Notas al pie que señalan información contextual de menor prioridad
+
+**Notas al pie** (al final del artículo):
+- Contienen información complementaria para contextualizar
+- Úsalas para desambiguar entidades si es necesario
+- NO extraigas de aquí las ideas principales del análisis
+- Las entidades mencionadas solo en notas tienen menor relevancia
+
+**Prioriza las oraciones marcadas con `<strong>` al extraer entidades y analizar dimensiones.**
+
 <analysis_dimensions>
 
 ## Dimensiones de Análisis

@@ -457,24 +457,15 @@ matcher = EntityLSHMatcher(
 
 ---
 
-## Diferencias con Sistema Antiguo
+## Ventajas del Sistema
 
-### ❌ Sistema Antiguo (Eliminado): `auto-classify`
-
-- Clasificación **puramente heurística** por patrones
-- Reglas rígidas (iniciales, nombres parciales)
-- No entiende contexto semántico
-- Muchos falsos positivos
-- Tabla `entity_tokens` para reverse indexing
-
-### ✅ Sistema Nuevo: `ai-classify`
-
-- Clasificación **semántica con IA**
-- LSH para descubrimiento eficiente de candidatos
-- OpenAI analiza contexto y significado
-- Mayor precisión (menos falsos positivos)
+- Clasificación **semántica con IA** que entiende contexto y significado
+- LSH para descubrimiento eficiente de candidatos (reducción de O(n²) a O(n))
+- OpenAI analiza contexto profundo de ambas entidades
+- Alta precisión con pocos falsos positivos
 - Tracking de comparaciones en `entity_pair_comparisons`
-- **No re-testa** pares ya comparados (ahorro de costos)
+- **No re-testa** pares ya comparados (ahorro de costos API)
+- Audit trail completo de decisiones para revisión y mejora
 
 ---
 

@@ -69,7 +69,7 @@ def calculate_global_relevance(
     ).join(
         Article.entities
     ).filter(
-        Article.enriched_at.isnot(None),
+        Article.clusterized_at.isnot(None),
         NamedEntity.entity_type.in_(EntityRankCalculator.RANKED_TYPES)
     )
 
@@ -91,7 +91,7 @@ def calculate_global_relevance(
         .join(article_entities, Article.id == article_entities.c.article_id)\
         .join(NamedEntity, NamedEntity.id == article_entities.c.entity_id)\
         .filter(
-            Article.enriched_at.isnot(None),
+            Article.clusterized_at.isnot(None),
             NamedEntity.entity_type.in_(EntityRankCalculator.RANKED_TYPES)
         )
 

@@ -268,9 +268,9 @@ def list(limit, source, tag, enriched, pending_enrich, no_pager):
             query = query.join(Article.tags).filter(Tag.name == tag)
 
         if enriched:
-            query = query.filter(Article.enriched_at.isnot(None))
+            query = query.filter(Article.clusterized_at.isnot(None))
         elif pending_enrich:
-            query = query.filter(Article.enriched_at.is_(None))
+            query = query.filter(Article.clusterized_at.is_(None))
 
         # Order and limit
         articles = query.order_by(Article.created_at.desc()).limit(limit).all()
@@ -299,13 +299,13 @@ def list(limit, source, tag, enriched, pending_enrich, no_pager):
         # Build output
         output_lines = [header]
         for art in articles:
-            enrich_status = click.style("✓", fg="green") if art.enriched_at else click.style("○", fg="yellow")
+            enrich_status = click.style("✓", fg="green") if art.clusterized_at else click.style("○", fg="yellow")
             output_lines.append(f"{enrich_status} [{art.id}] {art.title}")
             output_lines.append(f"    Source: {art.source.domain}")
             output_lines.append(f"    Date: {art.published_date}")
             output_lines.append(f"    Tags: {', '.join([t.name for t in art.tags[:3]])}{'...' if len(art.tags) > 3 else ''}")
-            if art.enriched_at:
-                output_lines.append(f"    Enriched: {art.enriched_at}")
+            if art.clusterized_at:
+                output_lines.append(f"    Clusterized: {art.clusterized_at}")
             output_lines.append("")
 
         output_text = "\n".join(output_lines)
@@ -356,7 +356,7 @@ def show(article_id, full, entities, clusters, analysis, flash):
         click.echo(f"Source: {art.source.domain}")
         click.echo(f"Category: {art.category or 'N/A'}")
         click.echo(f"Tags: {', '.join([t.name for t in art.tags])}")
-        click.echo(f"Enriched: {click.style('Yes', fg='green') if art.enriched_at else click.style('No', fg='yellow')} {f'({art.enriched_at})' if art.enriched_at else ''}")
+        click.echo(f"Clusterized: {click.style('Yes', fg='green') if art.clusterized_at else click.style('No', fg='yellow')} {f'({art.clusterized_at})' if art.clusterized_at else ''}")
         click.echo(f"URL: {art.url}")
         click.echo(f"Hash: {art.hash}")
 
@@ -368,7 +368,7 @@ def show(article_id, full, entities, clusters, analysis, flash):
 
             click.echo(f"\n{click.style('Entities:', bold=True)}")
 
-            if not art.enriched_at:
+            if not art.clusterized_at:
                 click.echo(click.style("  Article has not been enriched yet", fg="yellow"))
             else:
                 # Query article_entities association table
@@ -403,8 +403,8 @@ def show(article_id, full, entities, clusters, analysis, flash):
 
             click.echo(f"\n{click.style('Clusters:', bold=True)}")
 
-            if not art.cluster_enriched_at:
-                click.echo(click.style("  Article has not been cluster-enriched yet", fg="yellow"))
+            if not art.clusterized_at:
+                click.echo(click.style("  Article has not been clusterized yet", fg="yellow"))
             else:
                 # Query clusters for this article
                 article_clusters = session.query(ArticleCluster).filter_by(
