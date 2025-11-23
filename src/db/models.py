@@ -1234,7 +1234,7 @@ class LLMApiCall(Base):
     # Timing
     started_at = Column(DateTime, nullable=False, index=True)
     completed_at = Column(DateTime, nullable=True)
-    duration_ms = Column(Integer, nullable=True)  # Calculated: completed_at - started_at in milliseconds
+    duration_seconds = Column(Float, nullable=True)  # Calculated: completed_at - started_at in seconds
 
     # Tokens
     input_tokens = Column(Integer, nullable=True)
@@ -1264,5 +1264,5 @@ class LLMApiCall(Base):
 
     def __repr__(self):
         status = 'success' if self.success else 'error'
-        duration = f"{self.duration_ms}ms" if self.duration_ms else 'N/A'
+        duration = f"{self.duration_seconds:.2f}s" if self.duration_seconds else 'N/A'
         return f"<LLMApiCall(id={self.id}, type={self.call_type}, task={self.task_name}, model={self.model}, status={status}, duration={duration})>"

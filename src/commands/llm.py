@@ -5,9 +5,16 @@ CLI commands for LLM API call logs.
 import click
 from datetime import datetime, timedelta
 from tabulate import tabulate
-from db import Database
+from sqlalchemy import create_engine, func, desc
+from sqlalchemy.orm import sessionmaker
 from db.models import LLMApiCall
-from sqlalchemy import func, desc
+
+
+def get_logs_session():
+    """Get database session for LLM logs (separate database)."""
+    engine = create_engine('sqlite:///data/llm_logs.db', echo=False)
+    SessionLocal = sessionmaker(bind=engine)
+    return SessionLocal()
 
 
 @click.group()
@@ -20,8 +27,7 @@ def llm():
 @click.option('--days', default=7, help='Number of days to include in stats (default: 7)')
 def stats(days):
     """Show statistics of LLM API usage."""
-    db = Database()
-    session = db.get_session()
+    session = get_logs_session()
 
     try:
         # Calculate date range
@@ -54,13 +60,13 @@ def stats(days):
 
         # Average duration
         avg_duration = session.query(
-            func.avg(LLMApiCall.duration_ms)
+            func.avg(LLMApiCall.duration_seconds)
         ).filter(
             LLMApiCall.started_at >= cutoff_date,
-            LLMApiCall.duration_ms.isnot(None)
+            LLMApiCall.duration_seconds.isnot(None)
         ).scalar()
 
-        avg_duration_ms = int(avg_duration) if avg_duration else 0
+        avg_duration_seconds = avg_duration if avg_duration else 0.0
 
         # Calls by task
         calls_by_task = session.query(
@@ -90,7 +96,7 @@ def stats(days):
             ['Successful', click.style(str(successful_calls), fg='green')],
             ['Failed', click.style(str(total_calls - successful_calls), fg='red')],
             ['Success Rate', click.style(f"{success_rate:.1f}%", fg='green')],
-            ['Avg Duration', click.style(f"{avg_duration_ms}ms", fg='blue')]
+            ['Avg Duration', click.style(f"{avg_duration_seconds:.2f}s", fg='blue')]
         ]
         click.echo(tabulate(overview_table, tablefmt='plain'))
         click.echo()
@@ -130,8 +136,7 @@ def stats(days):
 @click.option('--success/--errors', default=None, help='Filter by success/error status')
 def list(limit, task, model, success):
     """List recent LLM API calls."""
-    db = Database()
-    session = db.get_session()
+    session = get_logs_session()
 
     try:
         # Build query
@@ -154,7 +159,7 @@ def list(limit, task, model, success):
         table_data = []
         for call in calls:
             status = click.style('✓', fg='green') if call.success else click.style('✗', fg='red')
-            duration = f"{call.duration_ms}ms" if call.duration_ms else 'N/A'
+            duration = f"{call.duration_seconds:.2f}s" if call.duration_seconds else 'N/A'
             tokens = f"{call.total_tokens}" if call.total_tokens else 'N/A'
             started = call.started_at.strftime('%Y-%m-%d %H:%M:%S')
 
@@ -189,8 +194,7 @@ def list(limit, task, model, success):
 @click.option('--show-output/--no-output', default=False, help='Show parsed output')
 def show(call_id, show_prompts, show_response, show_output):
     """Show detailed information about a specific API call."""
-    db = Database()
-    session = db.get_session()
+    session = get_logs_session()
 
     try:
         call = session.query(LLMApiCall).filter(LLMApiCall.id == call_id).first()
@@ -214,7 +218,7 @@ def show(call_id, show_prompts, show_response, show_output):
             ['Model', call.model],
             ['Started', call.started_at.strftime('%Y-%m-%d %H:%M:%S UTC')],
             ['Completed', call.completed_at.strftime('%Y-%m-%d %H:%M:%S UTC') if call.completed_at else 'N/A'],
-            ['Duration', f"{call.duration_ms}ms" if call.duration_ms else 'N/A']
+            ['Duration', f"{call.duration_seconds:.2f}s" if call.duration_seconds else 'N/A']
         ]
         click.echo(tabulate(info_table, tablefmt='plain'))
         click.echo()
@@ -283,8 +287,7 @@ def show(call_id, show_prompts, show_response, show_output):
 @click.option('--days', default=7, help='Number of days to analyze (default: 7)')
 def analyze(by, days):
     """Analyze LLM API usage patterns."""
-    db = Database()
-    session = db.get_session()
+    session = get_logs_session()
 
     try:
         cutoff_date = datetime.utcnow() - timedelta(days=days)
@@ -295,7 +298,7 @@ def analyze(by, days):
                 LLMApiCall.task_name,
                 func.count(LLMApiCall.id).label('calls'),
                 func.sum(LLMApiCall.total_tokens).label('tokens'),
-                func.avg(LLMApiCall.duration_ms).label('avg_duration'),
+                func.avg(LLMApiCall.duration_seconds).label('avg_duration'),
                 func.sum(LLMApiCall.success).label('successes')
             ).filter(
                 LLMApiCall.started_at >= cutoff_date
@@ -313,7 +316,7 @@ def analyze(by, days):
                     task or '(none)',
                     calls,
                     f"{tokens or 0:,}",
-                    f"{int(avg_dur) if avg_dur else 0}ms",
+                    f"{avg_dur:.2f}s" if avg_dur else '0.00s',
                     f"{success_rate:.1f}%"
                 ])
 
@@ -330,7 +333,7 @@ def analyze(by, days):
                 LLMApiCall.model,
                 func.count(LLMApiCall.id).label('calls'),
                 func.sum(LLMApiCall.total_tokens).label('tokens'),
-                func.avg(LLMApiCall.duration_ms).label('avg_duration'),
+                func.avg(LLMApiCall.duration_seconds).label('avg_duration'),
                 func.sum(LLMApiCall.success).label('successes')
             ).filter(
                 LLMApiCall.started_at >= cutoff_date
@@ -348,7 +351,7 @@ def analyze(by, days):
                     model,
                     calls,
                     f"{tokens or 0:,}",
-                    f"{int(avg_dur) if avg_dur else 0}ms",
+                    f"{avg_dur:.2f}s" if avg_dur else '0.00s',
                     f"{success_rate:.1f}%"
                 ])
 

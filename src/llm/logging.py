@@ -43,7 +43,7 @@ class LLMApiCallLogger:
         # Timing
         self.started_at = datetime.utcnow()
         self.completed_at: Optional[datetime] = None
-        self.duration_ms: Optional[int] = None
+        self.duration_seconds: Optional[float] = None
 
         # Prompts
         self.system_prompt: Optional[str] = None
@@ -95,87 +95,75 @@ class LLMApiCallLogger:
     def mark_success(self):
         """Mark call as successful and calculate duration."""
         self.completed_at = datetime.utcnow()
-        self.duration_ms = int((self.completed_at - self.started_at).total_seconds() * 1000)
+        self.duration_seconds = (self.completed_at - self.started_at).total_seconds()
         self.success = True
 
     def mark_error(self, error_message: str):
         """Mark call as failed with error message."""
         self.completed_at = datetime.utcnow()
-        self.duration_ms = int((self.completed_at - self.started_at).total_seconds() * 1000)
+        self.duration_seconds = (self.completed_at - self.started_at).total_seconds()
         self.success = False
         self.error_message = error_message
 
     def save(self):
         """
-        Save log entry to database.
+        Save log entry to separate logs database.
 
-        This creates a new database session internally to avoid interfering
-        with ongoing transactions in the main application.
-
-        Uses a retry mechanism with timeout to handle database locks.
+        Uses a completely separate database (data/llm_logs.db) to avoid
+        any conflicts with the main application database transactions.
         """
-        from db import Database
-        from db.models import LLMApiCall
-        import time
-        from sqlalchemy.exc import OperationalError
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from db.models import Base, LLMApiCall
+        from pathlib import Path
 
-        # Create separate session for logging (non-blocking)
-        db = Database()
-        session = db.get_session()
+        # Ensure data directory exists
+        Path("data").mkdir(parents=True, exist_ok=True)
 
-        # Retry configuration for database locks
-        max_retries = 3
-        retry_delay = 0.1  # 100ms
+        # Create separate engine for logs database
+        engine = create_engine('sqlite:///data/llm_logs.db', echo=False)
+
+        # Create tables if they don't exist
+        Base.metadata.create_all(engine)
+
+        # Create session
+        SessionLocal = sessionmaker(bind=engine)
+        session = SessionLocal()
 
         try:
-            for attempt in range(max_retries):
-                try:
-                    # Create log entry
-                    log_entry = LLMApiCall(
-                        call_type=self.call_type,
-                        task_name=self.task_name,
-                        model=self.model,
-                        started_at=self.started_at,
-                        completed_at=self.completed_at,
-                        duration_ms=self.duration_ms,
-                        input_tokens=self.input_tokens,
-                        output_tokens=self.output_tokens,
-                        total_tokens=self.total_tokens,
-                        system_prompt=self.system_prompt,
-                        user_prompt=self.user_prompt,
-                        messages=self.messages,
-                        response_raw=self.response_raw,
-                        parsed_output=self.parsed_output,
-                        success=1 if self.success else 0,
-                        error_message=self.error_message,
-                        context_data=self.context_data if self.context_data else None
-                    )
+            # Create log entry
+            log_entry = LLMApiCall(
+                call_type=self.call_type,
+                task_name=self.task_name,
+                model=self.model,
+                started_at=self.started_at,
+                completed_at=self.completed_at,
+                duration_seconds=self.duration_seconds,
+                input_tokens=self.input_tokens,
+                output_tokens=self.output_tokens,
+                total_tokens=self.total_tokens,
+                system_prompt=self.system_prompt,
+                user_prompt=self.user_prompt,
+                messages=self.messages,
+                response_raw=self.response_raw,
+                parsed_output=self.parsed_output,
+                success=1 if self.success else 0,
+                error_message=self.error_message,
+                context_data=self.context_data if self.context_data else None
+            )
 
-                    session.add(log_entry)
-                    session.commit()
-                    break  # Success, exit retry loop
+            session.add(log_entry)
+            session.commit()
 
-                except OperationalError as e:
-                    # Database locked - retry
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay)
-                        retry_delay *= 2  # Exponential backoff
-                        continue
-                    else:
-                        # Max retries exceeded - print warning but don't crash
-                        import sys
-                        print(f"Warning: Failed to save LLM API call log after {max_retries} attempts (database locked)", file=sys.stderr)
-                        session.rollback()
-
-                except Exception as e:
-                    # Other error - print to stderr but don't crash
-                    import sys
-                    print(f"Warning: Failed to save LLM API call log: {e}", file=sys.stderr)
-                    session.rollback()
-                    break  # Don't retry on other errors
+        except Exception as e:
+            # Silently fail - logging shouldn't crash the main application
+            session.rollback()
+            import sys
+            print(f"Warning: Failed to save LLM API call log: {e}", file=sys.stderr)
 
         finally:
             session.close()
+            engine.dispose()
 
 
 @contextmanager
