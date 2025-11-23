@@ -53,15 +53,21 @@ Proceso de análisis avanzado con OpenAI que extrae entidades nombradas y genera
 
 ### Generación de Flash News (`generate_flash_news`)
 
-Proceso independiente que genera resúmenes narrativos desde clusters CORE usando OpenAI. **Requiere que los artículos ya estén enriquecidos** (con clustering completado).
+Proceso independiente que genera resúmenes narrativos desde clusters importantes usando OpenAI. **Requiere que los artículos ya estén enriquecidos** (con clustering completado).
+
+**Lógica de selección de clusters**:
+1. **Preferencia**: Clusters CORE (score >= 0.60, no ruido)
+2. **Fallback**: Si no hay CORE, acepta clusters SECONDARY con score > 0.60 (incluyendo clusters de ruido con alta puntuación)
 
 **Características**:
 - **Generación con LLM**: Usa OpenAI Structured Outputs (GPT-4/5)
 - **Embeddings automáticos** para resúmenes y búsqueda semántica
 - **Idempotente**: Detecta y salta clusters que ya tienen flash news
 - **Manejo robusto de errores**: Fallas individuales no afectan otros clusters
-- **Stats detalladas**: core_clusters_found, flash_news_generated, flash_news_skipped
+- **Stats detalladas**: core_clusters_found, high_score_secondary_clusters_found, flash_news_generated, flash_news_skipped
 - **Performance**: ~10-15 segundos por cluster (según modelo de OpenAI)
+
+**Nota**: Algunos artículos pueden tener un solo cluster semántico cohesivo que el algoritmo marca como "ruido" (label=-1) pero con score muy alto. El sistema ahora los aprovecha para generar flash news cuando no hay alternativas CORE.
 
 ## Comandos CLI
 

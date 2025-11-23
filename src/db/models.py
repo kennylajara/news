@@ -116,6 +116,7 @@ class Source(Base):
     id = Column(Integer, primary_key=True)
     domain = Column(String(255), nullable=False, unique=True, index=True)
     name = Column(String(255), nullable=False)
+    authority_score = Column(Float, nullable=True, default=0.5)  # 0.0-1.0, default neutral (optional for flash news relevance)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
 
@@ -1052,6 +1053,13 @@ class FlashNews(Base):
     summary = Column(Text, nullable=False)  # LLM-generated summary
     embedding = Column(JSON, nullable=True)  # Vector embedding of summary (list of floats)
     published = Column(Integer, nullable=False, default=0)  # 0=unpublished, 1=published (SQLite doesn't have native boolean)
+
+    # Relevance scoring fields
+    relevance_score = Column(Float, nullable=True, default=0.0, index=True)  # Composite relevance score (0.0-1.0)
+    relevance_components = Column(JSON, nullable=True)  # Breakdown of score components for debugging
+    relevance_calculated_at = Column(DateTime, nullable=True, index=True)  # When score was last calculated
+    priority = Column(String(20), nullable=True, index=True)  # 'critical', 'high', 'medium', 'low'
+
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
 
@@ -1063,6 +1071,8 @@ class FlashNews(Base):
         Index('idx_flash_news_cluster', 'cluster_id'),
         Index('idx_flash_news_published', 'published'),
         Index('idx_flash_news_created', 'created_at'),
+        Index('idx_flash_news_relevance', 'relevance_score'),
+        Index('idx_flash_news_priority', 'priority'),
     )
 
     def __repr__(self):

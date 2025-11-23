@@ -10,7 +10,12 @@ from processors.clustering import make_embeddings
 
 def process_flash_news_article(article, batch_item, session):
     """
-    Generate flash news for all core clusters in an article that don't have flash news yet.
+    Generate flash news for clusters in an article that don't have flash news yet.
+
+    Selection logic:
+    1. First tries to find CORE clusters (score >= 0.60)
+    2. If no CORE clusters exist, accepts SECONDARY clusters with score > 0.60
+       (including noise clusters with high scores)
 
     Args:
         article: Article object (must have clusterized_at set)
@@ -23,6 +28,7 @@ def process_flash_news_article(article, batch_item, session):
     logs = []
     stats = {
         'core_clusters_found': 0,
+        'high_score_secondary_clusters_found': 0,
         'flash_news_generated': 0,
         'flash_news_skipped': 0,
         'processing_time': 0
@@ -49,10 +55,26 @@ def process_flash_news_article(article, batch_item, session):
         )
 
         stats['core_clusters_found'] = len(core_clusters)
-        logs.append(f"Found {len(core_clusters)} core clusters")
 
+        # If no CORE clusters, look for high-score SECONDARY clusters (including noise)
+        clusters_to_process = core_clusters
         if not core_clusters:
-            logs.append("No core clusters found, nothing to process")
+            logs.append("No CORE clusters found, looking for high-score SECONDARY clusters (score > 0.60)...")
+            high_score_secondary = (
+                session.query(ArticleCluster)
+                .filter(ArticleCluster.article_id == article.id)
+                .filter(ArticleCluster.category == ClusterCategory.SECONDARY)
+                .filter(ArticleCluster.score > 0.60)
+                .all()
+            )
+            clusters_to_process = high_score_secondary
+            stats['high_score_secondary_clusters_found'] = len(high_score_secondary)
+            logs.append(f"Found {len(high_score_secondary)} high-score SECONDARY clusters")
+        else:
+            logs.append(f"Found {len(core_clusters)} CORE clusters")
+
+        if not clusters_to_process:
+            logs.append("No eligible clusters found for flash news generation")
             batch_item.status = 'completed'
             batch_item.completed_at = datetime.utcnow()
             batch_item.logs = "\\n".join(logs)
@@ -66,8 +88,8 @@ def process_flash_news_article(article, batch_item, session):
         except ImportError as e:
             raise ImportError(f"Could not import OpenAI client: {e}")
 
-        # Process each core cluster
-        for cluster in core_clusters:
+        # Process each eligible cluster
+        for cluster in clusters_to_process:
             try:
                 # Check if flash news already exists
                 existing_flash = session.query(FlashNews).filter_by(cluster_id=cluster.id).first()
