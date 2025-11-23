@@ -231,8 +231,8 @@ Entidades nombradas extraídas de artículos mediante NER (Named Entity Recognit
 - `is_group`: Flag de grupo (solo significativo para entidades CANONICAL)
   - 0 = Entidad individual normal (persona, organización)
   - 1 = Entidad de grupo (banda, equipo, consejo) que puede tener miembros
-- `article_count`: Número de artículos que mencionan esta entidad (actualizado durante reranking)
-- `avg_local_relevance`: Promedio de relevancia local en todos los artículos donde aparece
+- `article_count`: Número de artículos que mencionan esta entidad (actualizado automáticamente durante procesamiento)
+- `avg_local_relevance`: Promedio de relevancia local en todos los artículos donde aparece (actualizado automáticamente durante procesamiento y recalculación)
 - `diversity`: Número de entidades únicas con las que co-ocurre (mide conectividad en el grafo)
 - `last_review_type`: Tipo de última revisión aplicada a la entidad
   - `none`: Sin revisión (entidad recién creada)

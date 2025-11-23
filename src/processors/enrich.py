@@ -3,7 +3,7 @@ Article enrichment module.
 Handles semantic sentence clustering.
 """
 from datetime import datetime
-from sqlalchemy import insert, update, delete
+from sqlalchemy import insert, update, delete, func
 from db import ProcessingBatch, BatchItem, Article, NamedEntity, EntityClassification, EntityOrigin, ArticleCluster, ArticleSentence, ClusterCategory
 from db.models import article_entities
 from processors.clustering import extract_sentences, make_embeddings, cluster_article
@@ -16,6 +16,38 @@ MAX_AMBIGUITY_THRESHOLD = 10  # Entities with more than this many canonical refs
 MAX_CONTEXTUAL_RESOLUTION_REFS = 10  # Maximum canonical refs to attempt contextual resolution (should be <= MAX_AMBIGUITY_THRESHOLD)
 
 
+def update_entity_avg_local_relevance(entity_ids, session):
+    """
+    Update avg_local_relevance for a list of entities based on their article_entities records.
+
+    This calculates the average relevance across all articles where each entity appears.
+    Should be called after inserting/updating article_entities records.
+
+    Args:
+        entity_ids: List of entity IDs to update (can include duplicates)
+        session: SQLAlchemy session
+    """
+    if not entity_ids:
+        return
+
+    # Get unique entity IDs
+    unique_entity_ids = set(entity_ids)
+
+    # Calculate avg_local_relevance for each entity
+    for entity_id in unique_entity_ids:
+        # Query average relevance from article_entities
+        avg_relevance = session.query(
+            func.avg(article_entities.c.relevance)
+        ).filter(
+            article_entities.c.entity_id == entity_id
+        ).scalar()
+
+        # Update entity record
+        session.query(NamedEntity).filter(
+            NamedEntity.id == entity_id
+        ).update({
+            'avg_local_relevance': avg_relevance if avg_relevance is not None else 0.0
+        })
 
 
 def calculate_entity_relevance(article, entity_text, mentions, total_mentions):
@@ -511,7 +543,7 @@ def recalculate_article_relevance(article_id, session):
         return {
             'entities_processed': 0,
             'entities_ignored': 0,
-            'entities_classification': 0
+            'entities_artificial': 0
         }
 
     # Load cluster info if available
@@ -563,8 +595,10 @@ def recalculate_article_relevance(article_id, session):
     stats = {
         'entities_processed': len(final_relevances),
         'entities_ignored': 0,
-        'entities_classification': 0
+        'entities_artificial': 0
     }
+
+    entity_ids_to_update = []
 
     for data in final_relevances:
         session.execute(
@@ -578,10 +612,17 @@ def recalculate_article_relevance(article_id, session):
             )
         )
 
+        # Track entity IDs for avg_local_relevance update
+        entity_ids_to_update.append(data['entity_id'])
+
         if data['relevance'] == 0.0:
             stats['entities_ignored'] += 1
         if data['origin'] == EntityOrigin.CLASSIFICATION:
-            stats['entities_classification'] += 1
+            stats['entities_artificial'] += 1
+
+    # Update avg_local_relevance for all affected entities
+    session.flush()  # Ensure inserts are committed before calculating averages
+    update_entity_avg_local_relevance(entity_ids_to_update, session)
 
     return stats
 

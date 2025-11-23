@@ -5,6 +5,7 @@ Generates multi-dimensional analysis of articles for recommendation system match
 
 from datetime import datetime
 from db import ProcessingBatch, BatchItem, Article, ArticleAnalysis
+from processors.enrich import update_entity_avg_local_relevance
 
 
 def categorize_sentences_by_cluster(clusters_info, sentences, original_content):
@@ -227,6 +228,8 @@ def process_article_analysis(article, batch_item, session):
         )
 
         # Save to database
+        entity_ids_to_update = []
+
         for data in final_relevances:
             stmt = insert(article_entities).values(
                 article_id=article.id,
@@ -237,6 +240,13 @@ def process_article_analysis(article, batch_item, session):
                 context_sentences=data.get('context_sentences', [])
             ).on_conflict_do_nothing()
             session.execute(stmt)
+
+            # Track entity IDs for avg_local_relevance update
+            entity_ids_to_update.append(data['entity_id'])
+
+        # Update avg_local_relevance for all affected entities
+        session.flush()  # Ensure inserts are committed before calculating averages
+        update_entity_avg_local_relevance(entity_ids_to_update, session)
 
         stats['entities_extracted'] = len(final_relevances)
         logs.append(f"Extracted {stats['entities_extracted']} unique entities")

@@ -28,8 +28,9 @@ Proceso de análisis avanzado con OpenAI que extrae entidades nombradas y genera
 - **Análisis profundo para recomendaciones**: Conceptos clave, relaciones semánticas, marcos narrativos
 - **Structured Outputs**: Usa esquema Pydantic para garantizar formato consistente
 - **Dos tablas generadas**:
-  - `article_entities`: Entidades extraídas con menciones y relevancia
+  - `article_entities`: Entidades extraídas con menciones y relevancia local
   - `article_analyses`: Análisis completo del artículo (tono, formato, audiencia, calidad, etc.)
+- **Actualización automática de métricas**: Calcula y actualiza `avg_local_relevance` para cada entidad
 - **Idempotente**: Detecta y salta artículos que ya tienen análisis
 - **Manejo robusto de errores**: Fallas individuales no afectan otros artículos
 - **Performance**: ~5-10 segundos por artículo (según modelo de OpenAI)
@@ -92,10 +93,13 @@ uv run news flash calculate-relevance --recalculate-all
 - `medium`: ≥ 0.35 (considerar si hay espacio)
 - `low`: < 0.35 (archivar)
 
-**Manejo inteligente de PageRank**:
-- Si entidades tienen PageRank: usa valores reales
-- Si faltan PageRank: usa promedio de entidades con PageRank
-- Si no hay PageRank: fallback a 0.6 (neutral)
+**Manejo inteligente de relevancia de entidades**:
+- Usa `avg_local_relevance` de cada entidad (actualizado automáticamente durante procesamiento)
+- Combina con `global_relevance` (PageRank) para calcular importancia total
+- Si faltan valores: usa promedio de entidades con datos disponibles
+- Fallback neutro: 0.6 si no hay datos disponibles
+
+**Nota**: No es necesario ejecutar `news entity rerank` para tener relevancia local actualizada, ya que se calcula automáticamente durante `analyze_article` y recalculaciones.
 
 ### Publicación de Flash News
 
