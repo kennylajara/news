@@ -257,28 +257,28 @@ uv run news entity search "Luis"
 
 ### MVP
 
-- AI Assisted entity classification (los ejemplos enviados a la IA deben ser lo más distinto posible entre sí)
-- Forzar a Spacy a detectar títulos si están colocados antes del nombre de una persona: Ministro, presidente, diputado
-- Forzar NER a detectar referencias aprobadas
-- Hacer que la IA pueda revisar hacer review de las entidades (con flag --auto-accept)
-- Relevancia por categoria
 - Calcular relevancia de las noticias antes de crear noticias flash
+- Logs de IA (guardar prompt enviado, resultado, modelo, tokens, tiempo de ejecución)
 - Calcular embeddings de la noticias
 - Crear embeddings de perfiles de usuarios (basado en los de las noticias con las que interactúan)
 - API REST para consulta de artículos
 - Frontend para visualización
 - newsletter
   - Suscripción
-  - Plantillas de correo (TXT, HTML y AMP)
+  - Plantillas de correo (TXT, HTML)
   - Endpoint de desarrollo para visualizar correos
   - Enviar noticias flash por email
+- En AI Assisted entity classification (los ejemplos enviados a la IA deben ser lo más distinto posible entre sí)
 
 ### Improvements
 
 - limpiar prints
 - Sistema de publicación automática
+- Plantillas AMP de correo
+- Relevancia por categoria
 - Validar calidad de la información extraída (validar el JSON tras extracción)
 - Reconocer monedas como un tipo de entidad (dólar, los dólares canadiense, peso, peso dominicano), diferenciarlo de MONEY (100 dólares, un peso, 100 pesos dominicanos)
 - Descarga asíncrona con aiohttp
 - Comentarios por entidades
 - Crear batches en el pagerank y guardar el motivo de finalización del cálculo (max iter, timeout, convergencia)
+- Migrar NER a version entrenada de spaCy

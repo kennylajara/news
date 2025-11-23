@@ -10,15 +10,22 @@
 
 ### Tabla: `sources`
 
-Fuentes de noticias (medios digitales).
+Fuentes de noticias (medios digitales) con score de autoridad para relevancia de flash news.
 
 | Campo | Tipo | Restricciones | Descripción |
 |-------|------|---------------|-------------|
 | id | INTEGER | PRIMARY KEY | ID auto-incremental |
 | domain | VARCHAR(255) | UNIQUE, NOT NULL, INDEX | Dominio (ej: "diariolibre.com") |
 | name | VARCHAR(255) | | Nombre descriptivo del medio |
+| authority_score | FLOAT | NULLABLE, DEFAULT 0.5 | Score de autoridad/confiabilidad (0.0-1.0) |
 | created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Fecha de creación |
 | updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
+
+**Authority Score**:
+- Rango: 0.0 (baja autoridad) a 1.0 (máxima autoridad)
+- Default: 0.5 (neutral)
+- Uso: Componente `source_authority` (5% peso) en relevancia de flash news
+- Configurable manualmente por fuente según reputación, fact-checking, etc.
 
 **Relaciones**:
 - 1:N con `articles` (un source tiene muchos artículos)
@@ -922,7 +929,7 @@ ORDER BY s.sentence_index;
 
 ### Tabla: `flash_news`
 
-Resúmenes narrativos generados automáticamente desde clusters core usando LLM.
+Resúmenes narrativos generados automáticamente desde clusters core usando LLM, con sistema de relevancia multi-componente para selección inteligente de publicación.
 
 | Campo | Tipo | Restricciones | Descripción |
 |-------|------|---------------|-------------|
@@ -931,6 +938,10 @@ Resúmenes narrativos generados automáticamente desde clusters core usando LLM.
 | summary | TEXT | NOT NULL | Resumen narrativo del cluster (2-3 oraciones) |
 | embedding | JSON | NULLABLE | Vector embedding del resumen (lista de floats) |
 | published | INTEGER | NOT NULL, DEFAULT 0, INDEX | Estado: 0=no publicado, 1=publicado |
+| relevance_score | FLOAT | NULLABLE, DEFAULT 0.0, INDEX | Score compuesto de relevancia (0.0-1.0) |
+| relevance_components | JSON | NULLABLE | Desglose de componentes del score para análisis |
+| relevance_calculated_at | DATETIME | NULLABLE, INDEX | Timestamp del último cálculo de relevancia |
+| priority | VARCHAR(20) | NULLABLE, INDEX | Tier de prioridad: critical, high, medium, low |
 | created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Fecha de creación |
 | updated_at | DATETIME | DEFAULT CURRENT_TIMESTAMP, INDEX | Última actualización |
 
@@ -943,6 +954,24 @@ Resúmenes narrativos generados automáticamente desde clusters core usando LLM.
 - `cluster_id` ON DELETE CASCADE: Si se elimina el cluster, se elimina el flash news
 - `published` es INTEGER (0/1) porque SQLite no tiene BOOLEAN nativo
 
+**Sistema de Relevancia**:
+
+El score de relevancia combina 5 componentes ponderados:
+
+| Componente | Peso | Descripción |
+|------------|------|-------------|
+| entity_importance | 45% | Importancia de entidades mencionadas (PageRank) |
+| temporal_freshness | 25% | Frescura temporal con decay exponencial |
+| cluster_quality | 15% | Calidad del cluster UMAP+HDBSCAN |
+| topic_diversity | 10% | Novedad temática vs. flash news recientes |
+| source_authority | 5% | Autoridad de la fuente |
+
+**Tiers de Prioridad**:
+- `critical`: score ≥ 0.75 (publicar siempre, bypass límites)
+- `high`: score ≥ 0.55 (publicar en batch normal)
+- `medium`: score ≥ 0.35 (considerar si hay espacio)
+- `low`: score < 0.35 (no publicar, archivar)
+
 **Generación**:
 - Proceso independiente `generate_flash_news` (separado de `enrich_article`)
 - Solo se generan para clusters con `category='CORE'`
@@ -950,22 +979,27 @@ Resúmenes narrativos generados automáticamente desde clusters core usando LLM.
 - Embedding generado con `sentence-transformers` (mismo modelo que clustering)
 - Idempotente: detecta y salta clusters que ya tienen flash news
 
-**Uso**:
-- `published=0`: Flash news generada pero no publicada
-- `published=1`: Flash news lista para mostrar públicamente
-- Embedding permite búsqueda semántica de noticias similares
+**Publicación**:
+- Selección inteligente basada en relevance_score y priority
+- Diversificación automática por fuente (max 2 por defecto)
+- Límites flexibles: min/max count con bypass para CRITICAL
 
 **Índices**:
 - `cluster_id` (UNIQUE): Garantiza un solo flash news por cluster
 - `published`: Permite filtrado rápido por estado
+- `relevance_score`: Ordenamiento por relevancia
+- `priority`: Filtrado por tier de prioridad
+- `relevance_calculated_at`: Tracking de cálculos
 - `created_at`: Para ordenamiento cronológico
 
 **Ejemplo de consulta**:
 ```sql
--- Flash news no publicadas con info del artículo
+-- Flash news no publicadas ordenadas por relevancia
 SELECT
     fn.id,
     fn.summary,
+    fn.relevance_score,
+    fn.priority,
     a.title,
     a.published_date,
     s.domain
@@ -974,7 +1008,9 @@ JOIN article_clusters ac ON fn.cluster_id = ac.id
 JOIN articles a ON ac.article_id = a.id
 JOIN sources s ON a.source_id = s.id
 WHERE fn.published = 0
-ORDER BY fn.created_at DESC;
+  AND fn.relevance_score >= 0.55
+ORDER BY fn.relevance_score DESC, fn.created_at DESC
+LIMIT 10;
 ```
 
 ## Acceso Directo

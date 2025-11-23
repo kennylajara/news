@@ -69,6 +69,76 @@ Proceso independiente que genera resúmenes narrativos desde clusters importante
 
 **Nota**: Algunos artículos pueden tener un solo cluster semántico cohesivo que el algoritmo marca como "ruido" (label=-1) pero con score muy alto. El sistema ahora los aprovecha para generar flash news cuando no hay alternativas CORE.
 
+### Cálculo de Relevancia de Flash News
+
+Después de generar flash news, se calcula un score multi-componente de relevancia para selección inteligente de publicación.
+
+**Comando**:
+```bash
+uv run news flash calculate-relevance
+uv run news flash calculate-relevance --recalculate-all
+```
+
+**Componentes del score** (ponderados):
+1. **entity_importance** (45%): Importancia de entidades mencionadas (PageRank)
+2. **temporal_freshness** (25%): Frescura con decay exponencial
+3. **cluster_quality** (15%): Score del cluster UMAP+HDBSCAN
+4. **topic_diversity** (10%): Novedad vs. flash news recientes
+5. **source_authority** (5%): Autoridad de la fuente
+
+**Tiers de prioridad**:
+- `critical`: ≥ 0.75 (publicar siempre)
+- `high`: ≥ 0.55 (publicar en batch)
+- `medium`: ≥ 0.35 (considerar si hay espacio)
+- `low`: < 0.35 (archivar)
+
+**Manejo inteligente de PageRank**:
+- Si entidades tienen PageRank: usa valores reales
+- Si faltan PageRank: usa promedio de entidades con PageRank
+- Si no hay PageRank: fallback a 0.6 (neutral)
+
+### Publicación de Flash News
+
+Selección y publicación inteligente basada en relevancia calculada.
+
+**Comando principal**:
+```bash
+uv run news flash publish
+uv run news flash publish --calculate  # Auto-calcula PageRank + relevancia
+uv run news flash publish --dry-run    # Preview sin publicar
+```
+
+**Lógica de selección**:
+1. **CRITICAL** (score ≥ high-score): Publica siempre, bypass límite max
+2. **NORMAL** (low-score ≤ score < high-score): Publica hasta max
+3. **FILLER** (score < low-score): Solo para alcanzar min
+
+**Parámetros**:
+- `--min`: Mínimo a publicar (default: 1)
+- `--max`: Máximo, bypasseable por CRITICAL (default: 5)
+- `--low-score`: Umbral normal (default: 0.55)
+- `--high-score`: Umbral CRITICAL (default: 0.75)
+- `--max-per-source`: Diversificación (default: 2)
+- `--calculate`: Auto-calc PageRank + relevancia
+- `--verbose`: Desglose detallado de scores
+
+**Workflow completo**:
+```bash
+# Paso 1-3: Procesamiento base (ver secciones anteriores)
+uv run news process start -d diariolibre.com -t enrich_article -s 10
+uv run news process start -d diariolibre.com -t analyze_article -s 10
+uv run news process start -d diariolibre.com -t generate_flash_news -s 10
+
+# Paso 4: Publicar (con auto-cálculo de relevancia)
+uv run news flash publish --calculate --dry-run -v
+
+# O workflow manual (más control)
+uv run news entity rerank                       # PageRank
+uv run news flash calculate-relevance          # Relevancia
+uv run news flash publish --dry-run            # Preview
+uv run news flash publish                      # Publicar
+```
+
 ## Comandos CLI
 
 ### Iniciar Procesamiento
@@ -97,6 +167,9 @@ uv run news process start -d diariolibre.com -t analyze_article -s 10
 
 # Paso 3: Generación de flash news (OpenAI)
 uv run news process start -d diariolibre.com -t generate_flash_news -s 10
+
+# Paso 4: Publicar flash news (con auto-cálculo de relevancia)
+uv run news flash publish --calculate
 ```
 
 ### Listar Batches
@@ -393,14 +466,19 @@ La mayoría de consultas comunes están disponibles a través de comandos CLI. V
 - Ver detalles de batch: `uv run news process show <batch_id>`
 - Ver logs de item: `uv run news process show <batch_id> --item <item_id>`
 - Ver flash news: `uv run news flash list`
+- Ver flash news por prioridad: `uv run news flash list --priority critical`
 - Ver detalles de flash news: `uv run news flash show <id>`
-- Ver estadísticas de flash news: `uv run news flash stats`
-- Ver entidades más relevantes: `uv run news entity list`
+- Calcular relevancia: `uv run news flash calculate-relevance`
+- Publicar flash news: `uv run news flash publish --calculate --dry-run`
+- Publicar IDs específicos: `uv run news flash publish-id 1 2 3`
+- Ver estadísticas: `uv run news flash stats`
+- Ver entidades más relevantes: `uv run news entity list --order-by global_rank`
+- Calcular PageRank: `uv run news entity rerank`
 - Ver artículos enriquecidos: `uv run news article list --enriched`
 - Ver artículos pendientes: `uv run news article list --pending-enrich`
 - Ver entidades de artículo: `uv run news article show <id> --entities`
 - Ver artículos que mencionan entidad: `uv run news entity show "<nombre>"`
-- Ver estadísticas: `uv run news domain stats`
+- Ver estadísticas de dominio: `uv run news domain stats`
 
 ### Consultas SQL Avanzadas
 
@@ -512,11 +590,13 @@ Ver **[README.md](../README.md)** sección "Instalación" para instrucciones com
 
 ### Consultas SQL para Flash News
 
-**Listar flash news no publicadas**:
+**Listar flash news por relevancia**:
 ```sql
 SELECT
     fn.id,
     fn.summary,
+    fn.relevance_score,
+    fn.priority,
     a.title as article_title,
     ac.score as cluster_score,
     fn.created_at
@@ -524,35 +604,63 @@ FROM flash_news fn
 JOIN article_clusters ac ON fn.cluster_id = ac.id
 JOIN articles a ON ac.article_id = a.id
 WHERE fn.published = 0
-ORDER BY fn.created_at DESC;
+  AND fn.relevance_score >= 0.55
+ORDER BY fn.relevance_score DESC, fn.created_at DESC
+LIMIT 10;
 ```
 
-**Estadísticas de flash news por fuente**:
+**Estadísticas de flash news por prioridad**:
 ```sql
 SELECT
-    s.domain,
-    COUNT(fn.id) as total_flash_news,
+    fn.priority,
+    COUNT(*) as count,
+    AVG(fn.relevance_score) as avg_score,
     SUM(fn.published) as published,
-    COUNT(fn.id) - SUM(fn.published) as unpublished
+    COUNT(*) - SUM(fn.published) as unpublished
 FROM flash_news fn
-JOIN article_clusters ac ON fn.cluster_id = ac.id
-JOIN articles a ON ac.article_id = a.id
-JOIN sources s ON a.source_id = s.id
-GROUP BY s.domain
-ORDER BY total_flash_news DESC;
+WHERE fn.priority IS NOT NULL
+GROUP BY fn.priority
+ORDER BY
+    CASE fn.priority
+        WHEN 'critical' THEN 1
+        WHEN 'high' THEN 2
+        WHEN 'medium' THEN 3
+        WHEN 'low' THEN 4
+    END;
 ```
 
-**Flash news con embeddings para búsqueda**:
+**Flash news CRITICAL sin publicar**:
 ```sql
 SELECT
     fn.id,
     fn.summary,
-    LENGTH(fn.embedding) as embedding_size,
-    a.title
+    fn.relevance_score,
+    s.domain,
+    a.published_date
 FROM flash_news fn
 JOIN article_clusters ac ON fn.cluster_id = ac.id
 JOIN articles a ON ac.article_id = a.id
-WHERE fn.embedding IS NOT NULL;
+JOIN sources s ON a.source_id = s.id
+WHERE fn.priority = 'critical'
+  AND fn.published = 0
+ORDER BY fn.relevance_score DESC;
+```
+
+**Análisis de componentes de relevancia**:
+```sql
+SELECT
+    fn.id,
+    fn.summary,
+    fn.relevance_score,
+    json_extract(fn.relevance_components, '$.entity_importance') as entity_imp,
+    json_extract(fn.relevance_components, '$.temporal_freshness') as temporal,
+    json_extract(fn.relevance_components, '$.cluster_quality') as cluster_q,
+    json_extract(fn.relevance_components, '$.topic_diversity') as diversity,
+    json_extract(fn.relevance_components, '$.source_authority') as authority
+FROM flash_news fn
+WHERE fn.relevance_components IS NOT NULL
+ORDER BY fn.relevance_score DESC
+LIMIT 20;
 ```
 
 ### Crear Nuevas Tareas LLM
