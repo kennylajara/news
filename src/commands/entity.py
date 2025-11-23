@@ -1541,3 +1541,100 @@ def ai_classify(entity_type, limit, min_confidence, lsh_threshold, dry_run, verb
 
     finally:
         session.close()
+
+
+@entity.command()
+@click.option('--limit', '-l', type=int, default=10, help='Number of executions to show (default: 10)')
+@click.option('--domain', '-d', help='Filter by source domain')
+def rerank_stats(limit, domain):
+    """
+    Show PageRank execution statistics and performance metrics.
+
+    Displays historical data about PageRank algorithm performance including
+    memory usage, sparsity, convergence, and timing information.
+
+    Examples:
+        news entity rerank-stats
+        news entity rerank-stats --limit 20
+        news entity rerank-stats --domain diariolibre.com
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from db.models import PageRankExecution
+
+    # Connect to logs database
+    engine = create_engine('sqlite:///data/llm_logs.db', echo=False)
+    SessionLocal = sessionmaker(bind=engine)
+    session = SessionLocal()
+
+    try:
+        # Query executions
+        query = session.query(PageRankExecution).filter(PageRankExecution.success == 1)
+
+        if domain:
+            query = query.filter(PageRankExecution.source_domain == domain)
+
+        executions = query.order_by(PageRankExecution.started_at.desc()).limit(limit).all()
+
+        if not executions:
+            click.echo(click.style("No PageRank executions found", fg="yellow"))
+            return
+
+        click.echo(click.style(f"\n📊 PageRank Execution History (last {len(executions)} runs)\n", fg="cyan", bold=True))
+
+        for i, exe in enumerate(executions, 1):
+            click.echo(click.style(f"{'=' * 80}", fg="blue"))
+            click.echo(click.style(f"Execution #{exe.id} - {exe.started_at.strftime('%Y-%m-%d %H:%M:%S')}", fg="cyan", bold=True))
+
+            if exe.source_domain:
+                click.echo(f"Domain: {click.style(exe.source_domain, fg='green')}")
+
+            click.echo(f"\n⏱️  {click.style('Performance:', bold=True)}")
+            click.echo(f"   • Duration: {exe.duration_seconds:.3f}s")
+            click.echo(f"   • Iterations: {exe.iterations} ({click.style('converged', fg='green') if exe.converged else click.style('timeout', fg='yellow')})")
+            if exe.convergence_delta:
+                click.echo(f"   • Final delta: {exe.convergence_delta:.2e}")
+
+            click.echo(f"\n📈 {click.style('Graph Statistics:', bold=True)}")
+            click.echo(f"   • Articles: {exe.total_articles}")
+            click.echo(f"   • Entities: {exe.total_entities} (ranked: {exe.entities_ranked})")
+            click.echo(f"   • Edges: {exe.graph_edges:,}")
+            click.echo(f"   • Density: {exe.graph_density:.2f}%")
+
+            click.echo(f"\n💾 {click.style('Memory & Sparsity:', bold=True)}")
+            click.echo(f"   • Matrix memory: {exe.matrix_memory_mb:.2f} MB")
+            click.echo(f"   • Non-zero elements: {exe.matrix_nnz:,}")
+            click.echo(f"   • Sparsity: {click.style(f'{exe.matrix_sparsity:.2f}%', fg='green')}")
+
+            click.echo(f"\n🎯 {click.style('Score Distribution:', bold=True)}")
+            click.echo(f"   • Min: {exe.min_score:.6f}")
+            click.echo(f"   • Max: {exe.max_score:.6f}")
+            click.echo(f"   • Mean: {exe.mean_score:.6f}")
+            click.echo(f"   • Median: {exe.median_score:.6f}")
+            click.echo(f"   • Std Dev: {exe.std_dev_score:.6f}")
+
+            if exe.top_entities:
+                click.echo(f"\n🏆 {click.style('Top 5 Entities:', bold=True)}")
+                for j, entity_data in enumerate(exe.top_entities[:5], 1):
+                    click.echo(f"   {j}. {entity_data['name']} - {entity_data['score']:.6f}")
+
+            click.echo("")
+
+        # Summary statistics
+        if len(executions) > 1:
+            click.echo(click.style(f"\n{'=' * 80}", fg="blue"))
+            click.echo(click.style(f"📊 Summary Statistics (last {len(executions)} runs)\n", fg="cyan", bold=True))
+
+            avg_duration = sum(e.duration_seconds for e in executions) / len(executions)
+            avg_entities = sum(e.total_entities for e in executions) / len(executions)
+            avg_sparsity = sum(e.matrix_sparsity for e in executions) / len(executions)
+            avg_memory = sum(e.matrix_memory_mb for e in executions) / len(executions)
+
+            click.echo(f"   • Avg duration: {click.style(f'{avg_duration:.3f}s', fg='green')}")
+            click.echo(f"   • Avg entities: {click.style(f'{avg_entities:.0f}', fg='green')}")
+            click.echo(f"   • Avg sparsity: {click.style(f'{avg_sparsity:.2f}%', fg='green')}")
+            click.echo(f"   • Avg memory: {click.style(f'{avg_memory:.2f} MB', fg='green')}")
+
+    finally:
+        session.close()
+        engine.dispose()

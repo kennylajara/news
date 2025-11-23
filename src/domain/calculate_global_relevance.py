@@ -9,11 +9,99 @@ This module provides the main orchestration function that:
 """
 
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from sqlalchemy.orm import Session
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 from db.database import Database
-from db.models import Article, NamedEntity, EntityType
+from db.models import Article, NamedEntity, EntityType, Base, PageRankExecution
 from domain.entity_rank import EntityRankCalculator
+from pathlib import Path
+
+
+def _save_pagerank_execution_log(
+    start_time: datetime,
+    end_time: datetime,
+    source_domain: Optional[str],
+    damping: float,
+    min_relevance_threshold: float,
+    time_decay_days: Optional[int],
+    total_articles: int,
+    pagerank_scores: Dict[str, float],
+    normalized_scores: Dict[str, float],
+    top_entities: List[tuple],
+    stats: Dict
+):
+    """
+    Save PageRank execution log to separate logs database.
+
+    Uses llm_logs.db to avoid conflicts with main application database.
+    """
+    try:
+        # Ensure data directory exists
+        Path("data").mkdir(parents=True, exist_ok=True)
+
+        # Create separate engine for logs database
+        engine = create_engine('sqlite:///data/llm_logs.db', echo=False)
+
+        # Create tables if they don't exist
+        Base.metadata.create_all(engine)
+
+        # Create session
+        SessionLocal = sessionmaker(bind=engine)
+        log_session = SessionLocal()
+
+        try:
+            # Create log entry
+            log_entry = PageRankExecution(
+                started_at=start_time,
+                completed_at=end_time,
+                duration_seconds=stats['duration_seconds'],
+                damping=damping,
+                max_iter=1000,  # From EntityRankCalculator default
+                tolerance=1e-6,  # From EntityRankCalculator default
+                min_relevance_threshold=min_relevance_threshold,
+                time_decay_days=time_decay_days,
+                timeout_seconds=30.0,  # From EntityRankCalculator default
+                source_domain=source_domain,
+                total_articles=total_articles,
+                total_entities=stats['total_entities'],
+                graph_edges=stats['graph_edges'],
+                graph_density=stats['graph_density'],
+                matrix_memory_mb=stats['matrix_memory_mb'],
+                matrix_nnz=stats['matrix_nnz'],
+                matrix_sparsity=stats['matrix_sparsity'],
+                iterations=stats['iterations'],
+                converged=1 if stats['converged'] else 0,
+                convergence_delta=stats['convergence_delta'],
+                entities_ranked=stats['entities_ranked'],
+                min_score=stats['min_score'],
+                max_score=stats['max_score'],
+                mean_score=stats['mean_score'],
+                median_score=stats['median_score'],
+                std_dev_score=stats['std_dev_score'],
+                top_entities=[{'name': name, 'score': score} for name, score in top_entities],
+                success=1,
+                error_message=None
+            )
+
+            log_session.add(log_entry)
+            log_session.commit()
+
+        except Exception as e:
+            # Silently fail - logging shouldn't crash the main application
+            log_session.rollback()
+            import sys
+            print(f"Warning: Failed to save PageRank execution log: {e}", file=sys.stderr)
+
+        finally:
+            log_session.close()
+            engine.dispose()
+
+    except Exception as e:
+        # Silently fail at outer level too
+        import sys
+        print(f"Warning: Failed to create PageRank log session: {e}", file=sys.stderr)
 
 
 def calculate_global_relevance(
@@ -136,7 +224,7 @@ def calculate_global_relevance(
         initial_scores=previous_scores
     )
 
-    pagerank_scores, normalized_scores, iterations = calculator.calculate_pagerank(articles)
+    pagerank_scores, normalized_scores, iterations, stats = calculator.calculate_pagerank(articles)
 
     # Step 5: Calculate complementary metrics
     complementary_metrics = calculator.calculate_complementary_metrics(articles)
@@ -175,6 +263,21 @@ def calculate_global_relevance(
 
     # Get top 10 entities (by normalized score for display)
     top_entities = sorted(normalized_scores.items(), key=lambda x: x[1], reverse=True)[:10]
+
+    # Step 8: Save execution log to llm_logs.db
+    _save_pagerank_execution_log(
+        start_time=start_time,
+        end_time=end_time,
+        source_domain=source_domain,
+        damping=damping,
+        min_relevance_threshold=min_relevance_threshold,
+        time_decay_days=time_decay_days,
+        total_articles=len(articles),
+        pagerank_scores=pagerank_scores,
+        normalized_scores=normalized_scores,
+        top_entities=top_entities,
+        stats=stats
+    )
 
     return {
         'total_articles': len(articles),

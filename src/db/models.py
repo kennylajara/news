@@ -1266,3 +1266,67 @@ class LLMApiCall(Base):
         status = 'success' if self.success else 'error'
         duration = f"{self.duration_seconds:.2f}s" if self.duration_seconds else 'N/A'
         return f"<LLMApiCall(id={self.id}, type={self.call_type}, task={self.task_name}, model={self.model}, status={status}, duration={duration})>"
+
+
+class PageRankExecution(Base):
+    """Log of PageRank algorithm executions for performance monitoring."""
+    __tablename__ = 'pagerank_executions'
+
+    id = Column(Integer, primary_key=True)
+
+    # Execution metadata
+    started_at = Column(DateTime, nullable=False, index=True)
+    completed_at = Column(DateTime, nullable=True)
+    duration_seconds = Column(Float, nullable=True)
+
+    # Input parameters
+    damping = Column(Float, nullable=False, default=0.85)
+    max_iter = Column(Integer, nullable=False, default=1000)
+    tolerance = Column(Float, nullable=False, default=1e-6)
+    min_relevance_threshold = Column(Float, nullable=False, default=0.3)
+    time_decay_days = Column(Integer, nullable=True)
+    timeout_seconds = Column(Float, nullable=False, default=30.0)
+    source_domain = Column(String(255), nullable=True, index=True)  # Optional domain filter
+
+    # Graph statistics
+    total_articles = Column(Integer, nullable=False)
+    total_entities = Column(Integer, nullable=False)
+    graph_edges = Column(Integer, nullable=True)  # Number of non-zero edges in graph
+    graph_density = Column(Float, nullable=True)  # Percentage of possible edges that exist
+
+    # Memory statistics
+    matrix_memory_mb = Column(Float, nullable=True)  # Memory used by sparse matrix
+    matrix_nnz = Column(Integer, nullable=True)  # Number of non-zero elements (nnz = non-zero)
+    matrix_sparsity = Column(Float, nullable=True)  # Percentage of zeros in matrix
+
+    # Convergence statistics
+    iterations = Column(Integer, nullable=False)
+    converged = Column(Integer, nullable=False, default=1)  # 1=converged, 0=timeout
+    convergence_delta = Column(Float, nullable=True)  # Final delta before stopping
+
+    # Results statistics
+    entities_ranked = Column(Integer, nullable=False)
+    min_score = Column(Float, nullable=True)
+    max_score = Column(Float, nullable=True)
+    mean_score = Column(Float, nullable=True)
+    median_score = Column(Float, nullable=True)
+    std_dev_score = Column(Float, nullable=True)
+
+    # Top entities (for quick reference)
+    top_entities = Column(JSON, nullable=True)  # List of top 10: [{"name": "...", "score": 0.95}, ...]
+
+    # Success/error tracking
+    success = Column(Integer, nullable=False, default=1, index=True)  # 1=success, 0=error
+    error_message = Column(Text, nullable=True)
+
+    # Indexes for common queries
+    __table_args__ = (
+        Index('idx_pagerank_executions_started_at', 'started_at'),
+        Index('idx_pagerank_executions_domain', 'source_domain'),
+        Index('idx_pagerank_executions_success', 'success'),
+    )
+
+    def __repr__(self):
+        status = 'success' if self.success else 'error'
+        duration = f"{self.duration_seconds:.2f}s" if self.duration_seconds else 'N/A'
+        return f"<PageRankExecution(id={self.id}, entities={self.entities_ranked}, iterations={self.iterations}, duration={duration}, status={status})>"

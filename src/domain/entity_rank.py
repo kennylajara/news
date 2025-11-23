@@ -17,6 +17,7 @@ import time
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Set, Tuple, Optional
+from scipy.sparse import lil_matrix, csr_matrix
 from db.models import EntityType
 
 
@@ -141,7 +142,7 @@ class EntityRankCalculator:
     def calculate_pagerank(
         self,
         articles: List[Dict]
-    ) -> Tuple[Dict[str, float], Dict[str, float], int]:
+    ) -> Tuple[Dict[str, float], Dict[str, float], int, Dict]:
         """
         Calculate PageRank scores for all entities.
 
@@ -149,15 +150,17 @@ class EntityRankCalculator:
             articles: List of article dicts (see build_graph for format)
 
         Returns:
-            Tuple of (raw_scores, normalized_scores, iterations):
+            Tuple of (raw_scores, normalized_scores, iterations, stats):
                 - raw_scores: Dict mapping entity name -> raw PageRank score
                 - normalized_scores: Dict mapping entity name -> normalized score (0.0-1.0)
                 - iterations: Number of iterations until convergence
+                - stats: Dict with execution statistics (memory, sparsity, convergence, etc.)
         """
+        start_time = time.time()
         graph, entities = self.build_graph(articles)
 
         if not entities:
-            return {}, {}, 0
+            return {}, {}, 0, {}
 
         entities = sorted(entities)  # Consistent ordering
         n = len(entities)
@@ -165,8 +168,9 @@ class EntityRankCalculator:
         # Map entities to indices
         entity_to_idx = {e: i for i, e in enumerate(entities)}
 
-        # Build weighted adjacency matrix
-        M = np.zeros((n, n))
+        # Build weighted adjacency matrix using sparse format
+        # LIL (List of Lists) is efficient for incremental construction
+        M = lil_matrix((n, n), dtype=np.float64)
 
         for entity_from, targets in graph.items():
             idx_from = entity_to_idx[entity_from]
@@ -178,8 +182,24 @@ class EntityRankCalculator:
                     # Normalize by total outgoing weight
                     M[idx_to, idx_from] = weight / total_weight
 
+        # Convert to CSR (Compressed Sparse Row) for efficient matrix operations
+        M = M.tocsr()
+
+        # Calculate graph and memory statistics
+        num_edges = M.nnz  # Number of non-zero elements
+        max_possible_edges = n * n
+        graph_density = (num_edges / max_possible_edges * 100) if max_possible_edges > 0 else 0.0
+        sparsity = 100.0 - graph_density
+
+        # Memory usage: data array + indices array + indptr array
+        # Each element: 8 bytes (float64) for data, 4 bytes (int32) for indices
+        matrix_memory_bytes = (M.data.nbytes + M.indices.nbytes + M.indptr.nbytes)
+        matrix_memory_mb = matrix_memory_bytes / (1024 * 1024)
+
         # Handle dangling nodes (entities with no outgoing edges)
-        dangling_mask = (M.sum(axis=0) == 0)
+        # For sparse matrices, check column sums
+        col_sums = np.asarray(M.sum(axis=0)).flatten()
+        dangling_mask = (col_sums == 0)
         dangling_indices = np.where(dangling_mask)[0]
 
         # Calculate midpoint for new entities
@@ -207,7 +227,9 @@ class EntityRankCalculator:
 
         # PageRank iteration with graceful timeout
         iterations = 0
-        start_time = time.time()
+        iteration_start_time = time.time()
+        converged = False
+        final_delta = None
 
         for iteration in range(self.max_iter):
             iterations = iteration + 1
@@ -218,20 +240,25 @@ class EntityRankCalculator:
                 dangling_contrib = self.damping * pr[dangling_indices].sum() / n
 
             # Standard PageRank formula
-            pr_new = (1 - self.damping) / n + self.damping * (M @ pr) + dangling_contrib
+            # Sparse matrix multiplication returns a matrix, convert to 1D array
+            pr_new = (1 - self.damping) / n + self.damping * M.dot(pr) + dangling_contrib
 
             # Normalize (ensures sum = 1.0)
             pr_new = pr_new / pr_new.sum()
 
             # Check convergence
-            if np.abs(pr_new - pr).sum() < self.tol:
+            delta = np.abs(pr_new - pr).sum()
+            if delta < self.tol:
+                converged = True
+                final_delta = float(delta)
                 break
 
             pr = pr_new
 
             # Graceful timeout check (doesn't raise error, just stops iterating)
-            elapsed_time = time.time() - start_time
+            elapsed_time = time.time() - iteration_start_time
             if elapsed_time >= self.timeout_seconds:
+                final_delta = float(delta)
                 break
 
         # Min-max normalization with NumPy (more efficient than Python)
@@ -248,7 +275,38 @@ class EntityRankCalculator:
         raw_scores = {entity: float(pr[idx]) for entity, idx in entity_to_idx.items()}
         normalized_scores = {entity: float(pr_normalized[idx]) for entity, idx in entity_to_idx.items()}
 
-        return raw_scores, normalized_scores, iterations
+        # Calculate statistics
+        total_duration = time.time() - start_time
+
+        stats = {
+            # Timing
+            'duration_seconds': total_duration,
+
+            # Graph statistics
+            'total_entities': n,
+            'graph_edges': int(num_edges),
+            'graph_density': float(graph_density),
+
+            # Memory statistics
+            'matrix_memory_mb': float(matrix_memory_mb),
+            'matrix_nnz': int(num_edges),
+            'matrix_sparsity': float(sparsity),
+
+            # Convergence statistics
+            'iterations': iterations,
+            'converged': converged,
+            'convergence_delta': final_delta,
+
+            # Results statistics
+            'entities_ranked': len(normalized_scores),
+            'min_score': float(pr_min),
+            'max_score': float(pr_max),
+            'mean_score': float(pr.mean()),
+            'median_score': float(np.median(pr)),
+            'std_dev_score': float(pr.std()),
+        }
+
+        return raw_scores, normalized_scores, iterations, stats
 
     def calculate_complementary_metrics(
         self,
