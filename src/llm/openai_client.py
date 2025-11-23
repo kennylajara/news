@@ -145,6 +145,8 @@ def openai_structured_output(
         ...     validation_context={'valid_entity_ids': [123, 456]}
         ... )
     """
+    from llm.logging import log_llm_api_call
+
     # Load schema and templates
     schema_class = _load_pydantic_schema(task_name)
     system_prompt, user_prompt = _render_prompts(task_name, data)
@@ -152,28 +154,55 @@ def openai_structured_output(
     # Use provided model or default from settings
     model_name = model or OPENAI_MODEL
 
-    # Call OpenAI API with structured outputs
-    completion = client.beta.chat.completions.parse(
-        model=model_name,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        response_format=schema_class
-    )
+    # Extract context data for logging
+    context_data = {
+        'task_name': task_name,
+        'data_keys': list(data.keys()),
+    }
 
-    # Parse the structured output
-    parsed = completion.choices[0].message.parsed
+    # Add relevant IDs if present
+    if 'article_id' in data:
+        context_data['article_id'] = data['article_id']
+    if 'entity_a_id' in data:
+        context_data['entity_a_id'] = data['entity_a_id']
+    if 'entity_b_id' in data:
+        context_data['entity_b_id'] = data['entity_b_id']
+    if 'entity_id' in data:
+        context_data['entity_id'] = data['entity_id']
 
-    if parsed is None:
-        raise ValueError("OpenAI API returned None for parsed output")
+    # Use logging context manager
+    with log_llm_api_call('structured_output', model_name, task_name, context_data) as logger:
+        # Set prompts
+        logger.set_prompts(system_prompt, user_prompt)
 
-    # If validation context provided, validate with context
-    if validation_context:
-        # Re-validate with context (Pydantic validators will use info.context)
-        parsed = schema_class.model_validate(
-            parsed.model_dump(),
-            context=validation_context
+        # Call OpenAI API with structured outputs
+        completion = client.beta.chat.completions.parse(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            response_format=schema_class
         )
 
-    return parsed
+        # Set response for logging
+        logger.set_response(completion)
+
+        # Parse the structured output
+        parsed = completion.choices[0].message.parsed
+
+        if parsed is None:
+            raise ValueError("OpenAI API returned None for parsed output")
+
+        # If validation context provided, validate with context
+        if validation_context:
+            # Re-validate with context (Pydantic validators will use info.context)
+            parsed = schema_class.model_validate(
+                parsed.model_dump(),
+                context=validation_context
+            )
+
+        # Set parsed output for logging
+        logger.set_parsed_output(parsed.model_dump())
+
+        return parsed

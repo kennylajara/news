@@ -1218,3 +1218,51 @@ class EntityPairComparison(Base):
 
     def __repr__(self):
         return f"<EntityPairComparison(id={self.id}, entities=[{self.entity_a_id}, {self.entity_b_id}], relationship={self.relationship}, confidence={self.confidence:.2f})>"
+
+
+class LLMApiCall(Base):
+    """Log of LLM API calls for monitoring, debugging, and cost tracking."""
+    __tablename__ = 'llm_api_calls'
+
+    id = Column(Integer, primary_key=True)
+
+    # Metadata of the call
+    call_type = Column(String(50), nullable=False, index=True)  # 'structured_output', 'chat_completion', 'embedding', etc.
+    task_name = Column(String(100), nullable=True, index=True)  # 'article_analysis', 'entity_pairwise_classification', etc.
+    model = Column(String(50), nullable=False, index=True)  # 'gpt-5-nano', 'gpt-4o', etc.
+
+    # Timing
+    started_at = Column(DateTime, nullable=False, index=True)
+    completed_at = Column(DateTime, nullable=True)
+    duration_ms = Column(Integer, nullable=True)  # Calculated: completed_at - started_at in milliseconds
+
+    # Tokens
+    input_tokens = Column(Integer, nullable=True)
+    output_tokens = Column(Integer, nullable=True)
+    total_tokens = Column(Integer, nullable=True)
+
+    # Prompts and response
+    system_prompt = Column(Text, nullable=True)
+    user_prompt = Column(Text, nullable=True)
+    messages = Column(JSON, nullable=True)  # For chat completions (non-structured)
+    response_raw = Column(JSON, nullable=False)  # Full OpenAI response object
+    parsed_output = Column(JSON, nullable=True)  # For structured outputs (Pydantic model dump)
+
+    # Status and errors
+    success = Column(Integer, nullable=False, default=1, index=True)  # 1=success, 0=error
+    error_message = Column(Text, nullable=True)
+
+    # Context metadata (for filtering and analysis)
+    context_data = Column(JSON, nullable=True)  # Additional metadata (article_id, entity_id, etc.)
+
+    # Indexes for common queries
+    __table_args__ = (
+        Index('idx_llm_api_calls_started_at', 'started_at'),
+        Index('idx_llm_api_calls_task_model', 'task_name', 'model'),
+        Index('idx_llm_api_calls_success', 'success'),
+    )
+
+    def __repr__(self):
+        status = 'success' if self.success else 'error'
+        duration = f"{self.duration_ms}ms" if self.duration_ms else 'N/A'
+        return f"<LLMApiCall(id={self.id}, type={self.call_type}, task={self.task_name}, model={self.model}, status={status}, duration={duration})>"
