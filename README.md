@@ -257,10 +257,10 @@ uv run news entity search "Luis"
 
 ### MVP
 
-- Calcular relevancia de las noticias antes de crear noticias flash
 - Logs de IA (guardar prompt enviado, resultado, modelo, tokens, tiempo de ejecución)
 - Calcular embeddings de la noticias
-- Crear embeddings de perfiles de usuarios (basado en los de las noticias con las que interactúan)
+- Usuarios
+  - Crear embeddings de perfiles de usuarios (basado en los de las noticias con las que interactúan)
 - API REST para consulta de artículos
 - Frontend para visualización
 - newsletter

@@ -306,7 +306,7 @@ Genera análisis profundo de artículos usando OpenAI para extracción de entida
      - PRODUCT (productos, servicios)
      - NORP (nacionalidades, grupos religiosos/políticos)
    - Cuenta menciones por entidad
-   - **Auto-aprueba** todas las entidades: `is_approved=1`, `last_review_type='ai-assisted'`
+   - **Auto-aprueba** todas las entidades: `is_approved=1`, `last_review_type=ReviewType.AI_ASSISTED`
    - Guarda en `named_entities` (permite mismo nombre con diferentes tipos)
    - Guarda relación artículo-entidad en `article_entities` con:
      - `mentions`: Número de menciones en el artículo
@@ -351,7 +351,7 @@ Extrae **6 tipos** de entidades con análisis semántico profundo:
 | NORP | Nacionalidades, grupos religiosos o políticos |
 
 - **EntityOrigin**: `AI_ANALYSIS`
-- **Auto-aprobación**: Todas las entidades se crean con `is_approved=1`, `last_review_type='ai-assisted'`
+- **Auto-aprobación**: Todas las entidades se crean con `is_approved=1`, `last_review_type=ReviewType.AI_ASSISTED`
 
 ## Campos de Seguimiento
 

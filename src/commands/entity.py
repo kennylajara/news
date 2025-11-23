@@ -21,7 +21,7 @@ def entity():
 @click.option('--type', '-t', 'entity_type', help='Filter by entity type')
 @click.option('--min-articles', '-a', type=int, help='Minimum number of articles')
 @click.option('--order-by', '-o', type=click.Choice(['articles', 'global_rank'], case_sensitive=False), default='articles', help='Order by articles or global_rank')
-@click.option('--review-type', '-r', type=click.Choice(['none', 'algorithmic', 'ai-assisted', 'manual'], case_sensitive=False), help='Filter by last_review_type')
+@click.option('--review-type', '-r', type=click.Choice(['none', 'ai-assisted', 'manual'], case_sensitive=False), help='Filter by last_review_type')
 @click.option('--approved/--not-approved', default=None, help='Filter by is_approved status')
 @click.option('--no-pager', is_flag=True, help='Disable pagination')
 def list(limit, entity_type, min_articles, order_by, review_type, approved, no_pager):
@@ -35,8 +35,8 @@ def list(limit, entity_type, min_articles, order_by, review_type, approved, no_p
         news entity list --min-articles 5
         news entity list --order-by global_rank
         news entity list --type org --min-articles 10 --order-by global_rank
-        news entity list --review-type algorithmic --not-approved
         news entity list --review-type ai-assisted --approved
+        news entity list --review-type manual --approved
     """
     db = Database()
     session = db.get_session()
@@ -60,7 +60,14 @@ def list(limit, entity_type, min_articles, order_by, review_type, approved, no_p
             query = query.filter(NamedEntity.article_count >= min_articles)
 
         if review_type:
-            query = query.filter(NamedEntity.last_review_type == review_type)
+            # Convert string to ReviewType enum
+            try:
+                from db.models import ReviewType
+                review_type_enum = ReviewType[review_type.upper().replace('-', '_')]
+                query = query.filter(NamedEntity.last_review_type == review_type_enum)
+            except KeyError:
+                click.echo(click.style(f"✗ Invalid review type: {review_type}", fg="red"))
+                return
 
         if approved is not None:
             query = query.filter(NamedEntity.is_approved == (1 if approved else 0))

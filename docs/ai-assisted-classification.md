@@ -3,7 +3,7 @@
 ## Contexto
 
 El sistema cuenta con:
-1. **Extracción de entidades con OpenAI** - Durante `analyze_article`, OpenAI extrae entidades y las auto-aprueba (`is_approved=1`, `last_review_type='ai-assisted'`)
+1. **Extracción de entidades con OpenAI** - Durante `analyze_article`, OpenAI extrae entidades y las auto-aprueba (`is_approved=1`, `last_review_type=ReviewType.AI_ASSISTED`)
 2. **Clasificación AI** (`ai-classify`) - LSH + comparación semántica pairwise para encontrar entidades relacionadas
    - Tracking de pares comparados (evita re-testar)
    - Análisis contextual profundo

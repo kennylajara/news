@@ -507,7 +507,7 @@ Lista entidades nombradas extraídas.
 **Opciones:**
 - `-l, --limit`: Número de entidades a mostrar (default: 20)
 - `-t, --type`: Filtrar por tipo de entidad
-  - Tipos válidos: PERSON, ORG, GPE, EVENT, PRODUCT, NORP
+  - Tipos válidos: PERSON, ORG, GPE, EVENT, PRODUCT, NORP, FAC, LOC
 - `-r, --min-relevance`: Relevancia global mínima
 - `--no-pager`: Desactivar paginación
 

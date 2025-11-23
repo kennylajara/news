@@ -26,6 +26,8 @@ class EntityType(enum.Enum):
     EVENT = "EVENT"         # Named events for grouping coverage (Elecciones 2024, Copa Mundial)
     PRODUCT = "PRODUCT"     # Specific products/services (iPhone 16, ChatGPT, Tesla Model 3)
     NORP = "NORP"           # Political/religious/ethnic groups (chavistas, republicanos, evangélicos)
+    FAC = "FAC"             # Buildings, airports, highways, bridges (Aeropuerto Las Américas, Autopista Duarte)
+    LOC = "LOC"             # Non-GPE locations, mountain ranges, bodies of water (Cordillera Central, Mar Caribe)
 
 
 class ClusterCategory(enum.Enum):
@@ -47,6 +49,13 @@ class EntityOrigin(enum.Enum):
     """Origin of entity in article-entity relationship."""
     AI_ANALYSIS = "ai_analysis"    # Extracted by OpenAI during article analysis
     CLASSIFICATION = "classification"  # Added by entity classification (ALIAS/AMBIGUOUS)
+
+
+class ReviewType(enum.Enum):
+    """Type of review performed on entity."""
+    NONE = "none"                  # No review performed
+    AI_ASSISTED = "ai_assisted"    # AI-assisted classification
+    MANUAL = "manual"              # Manual human review
 
 # Association table for many-to-many relationship between articles and tags
 article_tags = Table(
@@ -226,7 +235,7 @@ class NamedEntity(Base):
     last_rank_calculated_at = Column(DateTime, nullable=True, index=True)  # Last time global rank was calculated
 
     # Review and approval fields
-    last_review_type = Column(String(20), nullable=False, default='none', index=True)  # none, algorithmic, ai-assisted, manual
+    last_review_type = Column(Enum(ReviewType), nullable=False, default=ReviewType.NONE, index=True)
     is_approved = Column(Integer, nullable=False, default=0, index=True)  # 0=no, 1=yes
     last_review = Column(DateTime, nullable=True, index=True)  # Last time entity was reviewed
 

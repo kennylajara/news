@@ -201,7 +201,7 @@ Entidades nombradas extraídas de artículos mediante NER (Named Entity Recognit
 | pagerank | FLOAT | NULLABLE, DEFAULT 0.0 | Score PageRank raw (sin normalizar) |
 | global_relevance | FLOAT | NULLABLE, DEFAULT 0.0, INDEX | PageRank normalizado (0.0-1.0, min-max scaled) |
 | last_rank_calculated_at | DATETIME | NULLABLE, INDEX | Última vez que se calculó ranking global |
-| last_review_type | VARCHAR(20) | NOT NULL, DEFAULT 'none', INDEX | Tipo de última revisión (none/algorithmic/ai-assisted/manual) |
+| last_review_type | ENUM(ReviewType) | NOT NULL, DEFAULT ReviewType.NONE, INDEX | Tipo de última revisión (none/ai_assisted/manual) |
 | is_approved | INTEGER | NOT NULL, DEFAULT 0, INDEX | Estado de aprobación (0=pendiente, 1=aprobado) |
 | last_review | DATETIME | NULLABLE, INDEX | Última vez que la entidad fue revisada |
 | trend | INTEGER | NOT NULL, DEFAULT 0 | Score de tendencia (-100 a 100) |
@@ -221,6 +221,8 @@ Entidades nombradas extraídas de artículos mediante NER (Named Entity Recognit
 - `EVENT`: Eventos (huracanes, batallas, conferencias, festivales)
 - `PRODUCT`: Productos (objetos, vehículos, servicios, software)
 - `NORP`: Nacionalidades, grupos religiosos o políticos
+- `FAC`: Edificios, aeropuertos, autopistas, puentes (infraestructura nombrada)
+- `LOC`: Ubicaciones no-GPE, cordilleras, cuerpos de agua (accidentes geográficos)
 
 **Nota**: Los tipos están en mayúsculas siguiendo las convenciones de spaCy para permitir futura implementación con fine-tuning.
 
@@ -234,11 +236,10 @@ Entidades nombradas extraídas de artículos mediante NER (Named Entity Recognit
 - `article_count`: Número de artículos que mencionan esta entidad (actualizado automáticamente durante procesamiento)
 - `avg_local_relevance`: Promedio de relevancia local en todos los artículos donde aparece (actualizado automáticamente durante procesamiento y recalculación)
 - `diversity`: Número de entidades únicas con las que co-ocurre (mide conectividad en el grafo)
-- `last_review_type`: Tipo de última revisión aplicada a la entidad
-  - `none`: Sin revisión (entidad recién creada)
-  - `algorithmic`: Revisión automática por algoritmo
-  - `ai-assisted`: Revisión asistida por IA (OpenAI)
-  - `manual`: Revisión manual por usuario
+- `last_review_type`: Tipo de última revisión aplicada a la entidad (ENUM: ReviewType)
+  - `NONE`: Sin revisión (entidad recién creada) - valor por defecto
+  - `AI_ASSISTED`: Revisión asistida por IA (OpenAI) - usado por sistema de auto-clasificación
+  - `MANUAL`: Revisión manual por humano
 - `is_approved`: Estado de aprobación de la entidad
   - 0 = Pendiente de revisión/aprobación
   - 1 = Aprobada (confiable para uso en producción)

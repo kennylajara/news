@@ -11,7 +11,7 @@ También crea entidades para probar las cascadas.
 """
 
 from db.database import Database
-from db.models import NamedEntity, EntityClassification, EntityType
+from db.models import NamedEntity, EntityClassification, EntityType, ReviewType
 from processors.tokenization import populate_entity_tokens
 
 
@@ -36,7 +36,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -50,7 +50,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='none',
+            last_review_type=ReviewType.NONE,
             is_approved=0,
             article_count=0
         )
@@ -69,7 +69,7 @@ def create_test_entities():
             entity_type=EntityType.GPE,
             detected_types=["GPE"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -83,7 +83,7 @@ def create_test_entities():
             entity_type=EntityType.GPE,
             detected_types=["GPE"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -97,7 +97,7 @@ def create_test_entities():
             entity_type=EntityType.GPE,
             detected_types=["GPE"],
             classified_as=EntityClassification.ALIAS,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -117,7 +117,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -131,7 +131,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -145,7 +145,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -159,7 +159,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.AMBIGUOUS,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=0,
             article_count=0
         )
@@ -183,7 +183,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -197,7 +197,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.ALIAS,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -212,7 +212,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='none',
+            last_review_type=ReviewType.NONE,
             is_approved=0,
             article_count=0
         )
@@ -232,7 +232,7 @@ def create_test_entities():
             entity_type=EntityType.ORG,
             detected_types=["ORG"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -246,7 +246,7 @@ def create_test_entities():
             entity_type=EntityType.ORG,
             detected_types=["ORG"],
             classified_as=EntityClassification.ALIAS,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -261,7 +261,7 @@ def create_test_entities():
             entity_type=EntityType.ORG,
             detected_types=["ORG"],
             classified_as=EntityClassification.ALIAS,
-            last_review_type='none',
+            last_review_type=ReviewType.NONE,
             is_approved=0,
             article_count=0
         )
@@ -282,7 +282,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -296,7 +296,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -310,7 +310,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.ALIAS,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -325,7 +325,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.ALIAS,
-            last_review_type='none',
+            last_review_type=ReviewType.NONE,
             is_approved=0,
             article_count=0
         )
@@ -346,7 +346,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -360,7 +360,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -374,7 +374,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -388,7 +388,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.ALIAS,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -403,7 +403,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.AMBIGUOUS,
-            last_review_type='none',
+            last_review_type=ReviewType.NONE,
             is_approved=0,
             article_count=0
         )
@@ -428,7 +428,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -442,7 +442,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -456,7 +456,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.AMBIGUOUS,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=0,
             article_count=0
         )
@@ -471,7 +471,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='none',
+            last_review_type=ReviewType.NONE,
             is_approved=0,
             article_count=0
         )
@@ -491,7 +491,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -505,7 +505,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -519,7 +519,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -533,7 +533,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.AMBIGUOUS,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=0,
             article_count=0
         )
@@ -548,7 +548,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.ALIAS,
-            last_review_type='none',
+            last_review_type=ReviewType.NONE,
             is_approved=0,
             article_count=0
         )
@@ -569,7 +569,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -583,7 +583,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -597,7 +597,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -611,7 +611,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.AMBIGUOUS,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=0,
             article_count=0
         )
@@ -626,7 +626,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -640,7 +640,7 @@ def create_test_entities():
             entity_type=EntityType.PERSON,
             detected_types=["PERSON"],
             classified_as=EntityClassification.AMBIGUOUS,
-            last_review_type='none',
+            last_review_type=ReviewType.NONE,
             is_approved=0,
             article_count=0
         )
@@ -665,7 +665,7 @@ def create_test_entities():
             entity_type=EntityType.ORG,
             detected_types=["ORG"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -679,7 +679,7 @@ def create_test_entities():
             entity_type=EntityType.ORG,
             detected_types=["ORG"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -694,7 +694,7 @@ def create_test_entities():
             entity_type=EntityType.ORG,
             detected_types=["ORG"],
             classified_as=EntityClassification.ALIAS,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -710,7 +710,7 @@ def create_test_entities():
             entity_type=EntityType.ORG,
             detected_types=["ORG"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -724,7 +724,7 @@ def create_test_entities():
             entity_type=EntityType.ORG,
             detected_types=["ORG"],
             classified_as=EntityClassification.AMBIGUOUS,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=0,
             article_count=0
         )
@@ -746,7 +746,7 @@ def create_test_entities():
             entity_type=EntityType.ORG,
             detected_types=["ORG"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -760,7 +760,7 @@ def create_test_entities():
             entity_type=EntityType.ORG,
             detected_types=["ORG"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -774,7 +774,7 @@ def create_test_entities():
             entity_type=EntityType.ORG,
             detected_types=["ORG"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -789,7 +789,7 @@ def create_test_entities():
             entity_type=EntityType.ORG,
             detected_types=["ORG"],
             classified_as=EntityClassification.ALIAS,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -805,7 +805,7 @@ def create_test_entities():
             entity_type=EntityType.ORG,
             detected_types=["ORG"],
             classified_as=EntityClassification.CANONICAL,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=1,
             article_count=0
         )
@@ -819,7 +819,7 @@ def create_test_entities():
             entity_type=EntityType.ORG,
             detected_types=["ORG"],
             classified_as=EntityClassification.AMBIGUOUS,
-            last_review_type='manual',
+            last_review_type=ReviewType.MANUAL,
             is_approved=0,
             article_count=0
         )

@@ -168,7 +168,7 @@ uv run news entity ai-classify --lsh-threshold 0.4
 
 | Parámetro | Tipo | Default | Descripción |
 |-----------|------|---------|-------------|
-| `--type` | choice | ALL | Filtrar por tipo: PERSON, ORG, GPE, EVENT, PRODUCT, NORP |
+| `--type` | choice | ALL | Filtrar por tipo: PERSON, ORG, GPE, EVENT, PRODUCT, NORP, FAC, LOC |
 | `--dry-run` | flag | False | Solo mostrar sugerencias, no aplicar |
 | `--verbose` | flag | False | Logging detallado del proceso |
 | `--lsh-threshold` | float | 0.3 | Umbral de similitud LSH (0.0-1.0) |
@@ -319,7 +319,7 @@ jose_paliza.set_as_alias(jose_antonio_paliza, session)
 **Resultado**:
 ```python
 luis.set_as_alias(luis_abinader, session)
-luis.last_review_type = 'ai-assisted'
+luis.last_review_type = ReviewType.AI_ASSISTED
 luis.is_approved = 1  # Ya estaba aprobado desde AI extraction
 ```
 
@@ -373,7 +373,7 @@ INSERT INTO entity_pair_comparisons VALUES (
 **Resultado**:
 ```python
 dia.set_as_not_entity(session)
-dia.last_review_type = 'ai-assisted'
+dia.last_review_type = ReviewType.AI_ASSISTED
 ```
 
 ---

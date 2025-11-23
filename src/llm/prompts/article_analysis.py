@@ -141,6 +141,8 @@ class EntityTypeEnum(str, Enum):
     EVENT = "EVENT"         # Elecciones 2024, Copa Mundial, COP28 - Agrupar cobertura de un evento
     PRODUCT = "PRODUCT"     # iPhone 16, ChatGPT, Tesla Model 3 - Usuarios interesados en productos/tech
     NORP = "NORP"           # Evangélicos, republicanos, chavistas - Grupos políticos/religiosos/étnicos
+    FAC = "FAC"             # Aeropuerto Las Américas, Autopista Duarte, Puente Juan Bosch - Edificios, infraestructura
+    LOC = "LOC"             # Cordillera Central, Mar Caribe, Río Ozama - Ubicaciones no-GPE, accidentes geográficos
 
 
 class ExtractedEntity(BaseModel):

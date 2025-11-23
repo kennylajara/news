@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, func, and_
 
 from db.models import (
-    NamedEntity, EntityClassification, article_entities,
+    NamedEntity, EntityClassification, ReviewType, article_entities,
     EntityClassificationSuggestion
 )
 from processors.entity_lsh_matcher import EntityLSHMatcher, build_lsh_index_for_type
@@ -428,11 +428,11 @@ def _apply_pairwise_changes(
         should_approve_b = True
 
     # Mark both as reviewed by AI
-    entity_a.last_review_type = 'ai-assisted'
+    entity_a.last_review_type = ReviewType.AI_ASSISTED
     entity_a.last_review = datetime.utcnow()
     entity_a.is_approved = 1 if should_approve_a else 0
 
-    entity_b.last_review_type = 'ai-assisted'
+    entity_b.last_review_type = ReviewType.AI_ASSISTED
     entity_b.last_review = datetime.utcnow()
     entity_b.is_approved = 1 if should_approve_b else 0
 
@@ -483,7 +483,7 @@ def classify_entity_with_ai(
         if not candidates:
             # No candidates found
             if not dry_run:
-                entity.last_review_type = 'ai-assisted'
+                entity.last_review_type = ReviewType.AI_ASSISTED
                 entity.last_review = datetime.utcnow()
 
                 # If already CANONICAL, approve it
@@ -534,7 +534,7 @@ def classify_entity_with_ai(
         else:
             # All comparisons had low confidence
             if not dry_run:
-                entity.last_review_type = 'ai-assisted'
+                entity.last_review_type = ReviewType.AI_ASSISTED
                 entity.last_review = datetime.utcnow()
                 entity.is_approved = 0
                 session.commit()
