@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ subject }}</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 8px 8px 0 0;
+            text-align: center;
+        }
+        .content {
+            background: #f9f9f9;
+            padding: 30px;
+            border: 1px solid #e0e0e0;
+            border-top: none;
+        }
+        .footer {
+            background: #333;
+            color: #999;
+            padding: 20px;
+            text-align: center;
+            font-size: 12px;
+            border-radius: 0 0 8px 8px;
+        }
+        h1 {
+            margin: 0;
+            font-size: 28px;
+        }
+        .button {
+            display: inline-block;
+            padding: 12px 24px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{{ title }}</h1>
+    </div>
+    <div class="content">
+        <p>Hola{% if name %} {{ name }}{% endif %},</p>
+
+        <p>{{ message }}</p>
+
+        {% if button_text and button_url %}
+        <p style="text-align: center;">
+            <a href="{{ button_url }}" class="button">{{ button_text }}</a>
+        </p>
+        {% endif %}
+
+        <p>Saludos,<br>
+        El equipo de {{ sender_name|default('News Portal') }}</p>
+    </div>
+    <div class="footer">
+        <p>&copy; {{ current_year|default('2025') }} {{ sender_name|default('News Portal') }}. Todos los derechos reservados.</p>
+        <p>Este es un correo automático, por favor no responder.</p>
+    </div>
+</body>
+</html>

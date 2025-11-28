@@ -16,6 +16,7 @@ Usuario → CLI (Click) → get_news.py → Cache DB (opcional) → HTTP Downloa
 - `src/commands/flash.py` - Comandos de gestión de flash news
 - `src/commands/cache.py` - Comandos de gestión de caché de URLs
 - `src/commands/export.py` - Comandos de exportación de datos (corpus, etc.)
+- `src/commands/email.py` - Comandos de gestión de correos electrónicos
 - `src/get_news.py` - Orquestación principal: descargar → limpiar → extraer → guardar
 - `src/db/database.py` - Fachada de base de datos con operaciones CRUD
 - `src/db/models.py` - Modelos SQLAlchemy (Source, Article, Tag, NamedEntity, ArticleCluster, FlashNews, etc.)
@@ -30,6 +31,11 @@ Usuario → CLI (Click) → get_news.py → Cache DB (opcional) → HTTP Downloa
 - `src/processors/tokenization.py` - Tokenización de entidades para matching
 - `src/domain/entity_rank.py` - Cálculo de PageRank para entidades
 - `src/domain/calculate_global_relevance.py` - Cálculo de relevancia global
+- `src/email_system/client.py` - Cliente SMTP para envío de correos
+- `src/email_system/renderer.py` - Renderizado de templates Jinja2 para emails
+- `src/email_system/service.py` - Servicio de alto nivel para emails
+- `src/email_system/logging.py` - Sistema de logging de correos enviados
+- `src/llm/logging.py` - Sistema de logging de llamadas a APIs de LLM
 
 ## Pipeline de Descarga de Artículos
 
@@ -180,6 +186,59 @@ news cache stats --domain diariolibre.com
 news cache clear --domain diariolibre.com
 ```
 
+### Esquema de llm_logs.db (base de datos de logs):
+
+Base de datos separada para logging de operaciones del sistema. Contiene:
+
+```
+llm_api_calls (logs de llamadas a APIs de LLM)
+  ├─ id (PK)
+  ├─ call_type (tipo de llamada: structured_output, chat_completion)
+  ├─ task_name (nombre del task: article_analysis, etc.)
+  ├─ model (modelo usado: gpt-5-nano, etc.)
+  ├─ started_at, completed_at, duration_seconds
+  ├─ input_tokens, output_tokens, total_tokens
+  ├─ system_prompt, user_prompt, messages (JSON)
+  ├─ response_raw, parsed_output (JSON)
+  ├─ success (1=success, 0=error)
+  ├─ error_message, context_data (JSON)
+
+email_logs (logs de correos enviados)
+  ├─ id (PK)
+  ├─ template_id (FK a EmailTemplate, nullable)
+  ├─ recipient (email del destinatario)
+  ├─ subject (asunto del correo)
+  ├─ status (PENDING, SENT, FAILED)
+  ├─ error_message (si falló)
+  ├─ context_data (variables del template, JSON)
+  ├─ sent_at (timestamp de envío)
+  ├─ created_at, updated_at
+
+pagerank_executions (logs de ejecuciones de PageRank)
+  ├─ id (PK)
+  ├─ started_at, completed_at, duration_seconds
+  ├─ damping, max_iter, tolerance, min_relevance_threshold
+  ├─ total_articles, total_entities, graph_edges
+  ├─ iterations, converged, entities_ranked
+  ├─ success, error_message
+```
+
+**Nota**: Los templates de email se guardan en la base de datos principal (`news.db`) en la tabla `email_templates`, pero los logs de envío van en `llm_logs.db` para mantener separadas las operaciones de negocio del logging del sistema.
+
+### Uso de logs:
+
+```bash
+# Ver logs de LLM
+news llm logs --limit 20
+news llm logs --task article_analysis
+news llm logs --status error
+
+# Ver logs de emails
+news email logs --limit 20
+news email logs --status failed
+news email logs --recipient user@example.com
+```
+
 ## Patrones Importantes
 
 1. **Carga dinámica de extractores**: Los extractores se importan en tiempo de ejecución según el dominio
@@ -200,7 +259,8 @@ src/
 │   ├── process.py    # Comandos de procesamiento (start, list, show)
 │   ├── entity.py     # Comandos de entidades (list, show, stats, ai-classify)
 │   ├── flash.py      # Comandos de flash news (list, show, publish, stats)
-│   └── export.py     # Comandos de exportación (corpus)
+│   ├── export.py     # Comandos de exportación (corpus)
+│   └── email.py      # Comandos de correos (send, send-template, logs)
 ├── db/               # Modelos de base de datos y operaciones
 │   ├── models.py     # Modelos SQLAlchemy (news.db)
 │   ├── database.py   # Fachada CRUD (news.db)
@@ -219,7 +279,14 @@ src/
 │   └── calculate_global_relevance.py  # Cálculo de relevancia global
 ├── llm/              # Integración con LLMs
 │   ├── prompts/      # Prompts Jinja2 y schemas Pydantic
-│   └── openai_structured_output.py  # Wrapper genérico
+│   ├── openai_client.py  # Wrapper genérico para OpenAI
+│   └── logging.py    # Sistema de logging de llamadas a LLM
+├── email_system/     # Sistema de envío de correos
+│   ├── client.py     # Cliente SMTP
+│   ├── renderer.py   # Renderizado de templates Jinja2
+│   ├── service.py    # Servicio de alto nivel
+│   ├── logging.py    # Sistema de logging de correos
+│   └── templates/    # Templates de email (.jinja)
 ├── extractors/       # Extractores específicos por dominio
 │   ├── html_to_markdown.py      # Helpers de conversión
 │   └── {domain}_com.py          # Extractores por sitio

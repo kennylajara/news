@@ -18,6 +18,19 @@ class ProcessType(enum.Enum):
     ANALYZE_ARTICLE = "analyze_article"
 
 
+class EmailTemplateType(enum.Enum):
+    """Email template content type."""
+    TXT = "txt"
+    HTML = "html"
+
+
+class EmailStatus(enum.Enum):
+    """Email sending status."""
+    PENDING = "pending"
+    SENT = "sent"
+    FAILED = "failed"
+
+
 class EntityType(enum.Enum):
     """Types of named entities for recommendation systems."""
     PERSON = "PERSON"       # Specific individuals users follow (Nicolás Maduro, Donald Trump)
@@ -1330,3 +1343,51 @@ class PageRankExecution(Base):
         status = 'success' if self.success else 'error'
         duration = f"{self.duration_seconds:.2f}s" if self.duration_seconds else 'N/A'
         return f"<PageRankExecution(id={self.id}, entities={self.entities_ranked}, iterations={self.iterations}, duration={duration}, status={status})>"
+
+
+class EmailTemplate(Base):
+    """Email template for sending emails with Jinja2."""
+    __tablename__ = 'email_templates'
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), unique=True, nullable=False, index=True)  # e.g., 'newsletter_digest', 'flash_news_alert'
+    subject = Column(String(500), nullable=False)
+    template_type = Column(Enum(EmailTemplateType), nullable=False, index=True)  # TXT or HTML
+    content = Column(Text, nullable=False)  # Jinja2 template content
+    description = Column(Text, nullable=True)  # Human-readable description
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
+
+    # Relationships
+    logs = relationship('EmailLog', back_populates='template', cascade='all, delete-orphan')
+
+    def __repr__(self):
+        return f"<EmailTemplate(name='{self.name}', type={self.template_type.value})>"
+
+
+class EmailLog(Base):
+    """Log of sent emails for tracking and debugging."""
+    __tablename__ = 'email_logs'
+
+    id = Column(Integer, primary_key=True)
+    template_id = Column(Integer, ForeignKey('email_templates.id'), nullable=True)  # NULL if sent without template
+    recipient = Column(String(500), nullable=False, index=True)
+    subject = Column(String(500), nullable=False)
+    status = Column(Enum(EmailStatus), default=EmailStatus.PENDING, nullable=False, index=True)
+    error_message = Column(Text, nullable=True)
+    context_data = Column(JSON, nullable=True)  # Template variables used for rendering
+    sent_at = Column(DateTime, nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, index=True)
+
+    # Relationships
+    template = relationship('EmailTemplate', back_populates='logs')
+
+    # Indexes for common queries
+    __table_args__ = (
+        Index('idx_email_logs_status_created', 'status', 'created_at'),
+        Index('idx_email_logs_recipient_sent', 'recipient', 'sent_at'),
+    )
+
+    def __repr__(self):
+        return f"<EmailLog(id={self.id}, recipient='{self.recipient}', status={self.status.value})>"

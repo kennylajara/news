@@ -921,3 +921,215 @@ uv run news process show 5 --item 12
 # 5. Ver estadísticas de flash news
 uv run news flash stats
 ```
+
+## Correos Electrónicos
+
+### `news email send`
+
+Envía un correo electrónico simple.
+
+**Opciones:**
+- `-r, --recipient`: Dirección de email del destinatario (requerido)
+- `-s, --subject`: Asunto del correo (requerido)
+- `-m, --message`: Contenido del mensaje (requerido)
+- `--html`: Indica que el mensaje es HTML (por defecto es texto plano)
+
+**Ejemplos:**
+```bash
+# Enviar texto plano
+uv run news email send -r user@example.com -s "Test" -m "Hello World"
+
+# Enviar HTML
+uv run news email send -r user@example.com -s "Newsletter" -m "<h1>Hello</h1>" --html
+```
+
+### `news email send-template`
+
+Envía un correo usando templates de archivo (.jinja).
+
+**Opciones:**
+- `-t, --template`: Nombre del template (sin extensión .jinja) (requerido)
+- `-r, --recipient`: Dirección de email del destinatario (requerido)
+- `-s, --subject`: Asunto del correo (requerido)
+- `-v, --var`: Variables del template en formato `key=value` (múltiples permitidos)
+
+**Ejemplos:**
+```bash
+# Enviar con template simple
+uv run news email send-template -t test -r user@example.com -s "Welcome" \
+    -v title="Bienvenido" -v message="Gracias por registrarte" -v name="Juan"
+
+# Enviar newsletter (usa newsletter.html.jinja y newsletter.txt.jinja)
+uv run news email send-template -t newsletter -r user@example.com \
+    -s "Newsletter Semanal" -v subscriber_name="Juan"
+```
+
+**Nota**: El sistema busca automáticamente las versiones `.html.jinja` y `.txt.jinja` del template. Si ambas existen, se envían ambas versiones (multipart email).
+
+### `news email create-template`
+
+Crea un template de email en la base de datos.
+
+**Opciones:**
+- `-n, --name`: Nombre único del template (requerido)
+- `-s, --subject`: Asunto del correo (requerido)
+- `-t, --type`: Tipo de template: `html` o `txt` (requerido)
+- `-f, --file`: Ruta al archivo de template para importar
+- `-c, --content`: Contenido del template (si no se usa --file)
+- `-d, --description`: Descripción del template
+
+**Ejemplos:**
+```bash
+# Crear template desde archivo
+uv run news email create-template -n welcome_email -s "Welcome!" -t html \
+    -f src/email_system/templates/test.html.jinja \
+    -d "Welcome email for new users"
+
+# Crear template con contenido directo
+uv run news email create-template -n simple_alert -s "Alert" -t txt \
+    -c "Alert: {{ message }}" -d "Simple alert template"
+```
+
+### `news email list-templates`
+
+Lista todos los templates disponibles (archivos y base de datos).
+
+**Ejemplos:**
+```bash
+uv run news email list-templates
+```
+
+**Output:**
+```
+=== Database Templates ===
+  welcome_email (html)
+    Subject: Welcome!
+    Description: Welcome email for new users
+    Created: 2025-11-28 12:00
+
+=== File Templates ===
+  newsletter.html.jinja
+  newsletter.txt.jinja
+  test.html.jinja
+  test.txt.jinja
+```
+
+### `news email logs`
+
+Muestra el historial de correos enviados.
+
+**Opciones:**
+- `--status`: Filtrar por estado: `pending`, `sent`, `failed`
+- `--recipient`: Filtrar por email del destinatario
+- `-l, --limit`: Número máximo de resultados (default: 50)
+- `--no-pager`: Desactivar paginación
+
+**Ejemplos:**
+```bash
+# Ver todos los logs
+uv run news email logs
+
+# Ver solo emails fallidos
+uv run news email logs --status failed
+
+# Ver emails enviados a un destinatario específico
+uv run news email logs --recipient user@example.com
+
+# Ver últimos 10 logs
+uv run news email logs --limit 10
+```
+
+**Output:**
+```
+=== Email Logs (5 results) ===
+
+ID: 5
+  Status: SENT
+  Recipient: user@example.com
+  Subject: Welcome!
+  Template ID: 1
+  Created: 2025-11-28 12:00:00
+  Sent: 2025-11-28 12:00:01
+
+ID: 4
+  Status: FAILED
+  Recipient: invalid@domain
+  Subject: Test
+  Created: 2025-11-28 11:00:00
+  Error: SMTP error: Connection refused
+```
+
+### `news email test`
+
+Prueba la conexión SMTP y configuración.
+
+**Ejemplos:**
+```bash
+uv run news email test
+```
+
+**Output:**
+```
+Testing SMTP connection...
+✓ SMTP connection successful
+```
+
+o
+
+```
+Testing SMTP connection...
+✗ SMTP connection failed
+```
+
+## Workflows Comunes - Emails
+
+### Configurar servidor SMTP
+
+```bash
+# 1. Copiar ejemplo de configuración
+cp .env.example .env
+
+# 2. Editar .env con tus credenciales SMTP
+# SMTP_HOST=smtp.gmail.com
+# SMTP_PORT=587
+# SMTP_USERNAME=your-email@gmail.com
+# SMTP_PASSWORD=your-app-password
+# SMTP_FROM_EMAIL=your-email@gmail.com
+
+# 3. Probar conexión
+uv run news email test
+```
+
+### Enviar newsletter a suscriptores
+
+```bash
+# 1. Ver templates disponibles
+uv run news email list-templates
+
+# 2. Enviar newsletter usando template
+uv run news email send-template -t newsletter \
+    -r subscriber@example.com \
+    -s "Newsletter Semanal - $(date +%Y-%m-%d)" \
+    -v subscriber_name="Juan Pérez"
+
+# 3. Verificar envío
+uv run news email logs --limit 1
+```
+
+### Debugging de errores de envío
+
+```bash
+# 1. Probar conexión SMTP
+uv run news email test
+
+# 2. Ver emails fallidos
+uv run news email logs --status failed
+
+# 3. Ver detalles del error
+uv run news email logs --limit 5
+
+# 4. Revisar configuración
+cat .env | grep SMTP
+```
+
+**Nota**: Para más detalles sobre el sistema de email, ver [docs/email.md](email.md).

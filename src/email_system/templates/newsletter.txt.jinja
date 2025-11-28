@@ -1,0 +1,32 @@
+================================================================================
+📰 NEWSLETTER
+{{ date|datetimeformat('%d de %B, %Y') }}
+================================================================================
+
+Hola{% if subscriber_name %} {{ subscriber_name }}{% endif %},
+
+Aquí están las noticias más importantes de hoy:
+
+{% for article in articles %}
+--------------------------------------------------------------------------------
+{{ article.title }}
+{{ article.source }} • {{ article.published_date|datetimeformat('%d/%m/%Y %H:%M') }}
+{% if article.subtitle %}
+
+{{ article.subtitle }}
+{% endif %}
+
+{{ article.summary|default(article.content[:200] + '...') }}
+
+Leer más: {{ article.url }}
+
+{% endfor %}
+{% if not articles %}
+No hay artículos para mostrar en este momento.
+{% endif %}
+================================================================================
+© {{ current_year|default('2025') }} News Portal. Todos los derechos reservados.
+
+Recibiste este correo porque estás suscrito a nuestro newsletter.
+Cancelar suscripción: {{ unsubscribe_url }}
+================================================================================

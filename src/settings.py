@@ -58,3 +58,17 @@ DEBUG = get_setting('DEBUG', 'False').lower() in ('true', '1', 'yes')
 
 # Database paths
 CACHE_DB_PATH = get_setting('CACHE_DB_PATH', 'data/cache.db')
+
+# Email SMTP settings
+SMTP_HOST = get_setting('SMTP_HOST')
+SMTP_PORT = int(get_setting('SMTP_PORT', '587'))
+SMTP_USERNAME = get_setting('SMTP_USERNAME')
+SMTP_PASSWORD = get_setting('SMTP_PASSWORD')
+SMTP_FROM_EMAIL = get_setting('SMTP_FROM_EMAIL')
+SMTP_FROM_NAME = get_setting('SMTP_FROM_NAME', 'News Portal')
+SMTP_USE_TLS = get_setting('SMTP_USE_TLS', 'True').lower() in ('true', '1', 'yes')
+SMTP_USE_SSL = get_setting('SMTP_USE_SSL', 'False').lower() in ('true', '1', 'yes')
+SMTP_TIMEOUT = int(get_setting('SMTP_TIMEOUT', '30'))
+
+# Email templates directory
+EMAIL_TEMPLATES_DIR = get_setting('EMAIL_TEMPLATES_DIR', 'src/email_system/templates')

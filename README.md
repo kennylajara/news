@@ -25,6 +25,12 @@ Este proyecto descarga noticias de diversos medios digitales, extrae su contenid
 - **Relevancia ajustada por contexto**: Entidades en clusters importantes reciben mayor peso
 - **Embeddings vectoriales**: Permite búsqueda semántica de noticias similares
 
+### Sistema de Correos
+- **Envío SMTP configurable**: Soporte para cualquier servidor SMTP (Gmail, SendGrid, etc.)
+- **Templates Jinja2**: Versiones TXT y HTML para emails profesionales
+- **Logging automático**: Tracking de todos los correos enviados en base de datos
+- **Gestión de templates**: Almacenamiento en archivos o base de datos
+
 ### Interfaz
 - **CLI completo**: Interfaz de línea de comandos con Click
 - **Paginación automática**: Para listas largas de resultados
@@ -239,6 +245,7 @@ uv run news entity search "Luis"
 - **[Caché de URLs](docs/cache.md)** - Sistema de caché persistente para desarrollo
 - **[Crear Extractores](docs/extractors.md)** - Guía completa con templates y ejemplos
 - **[Procesamiento](docs/processing.md)** - Sistema de batches y clustering semántico
+- **[Sistema de Email](docs/email.md)** - Envío de correos con SMTP y templates Jinja2
 - **[Auto-Clasificación de Entidades](docs/auto-classification.md)** - Sistema AI para detectar aliases y entidades ambiguas
 - **[Clasificación AI Asistida](docs/ai-assisted-classification.md)** - LSH + comparación pairwise con OpenAI
 

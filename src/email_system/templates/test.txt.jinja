@@ -1,0 +1,19 @@
+================================================================================
+{{ title }}
+================================================================================
+
+Hola{% if name %} {{ name }}{% endif %},
+
+{{ message }}
+
+{% if button_text and button_url %}
+{{ button_text }}: {{ button_url }}
+{% endif %}
+
+Saludos,
+El equipo de {{ sender_name|default('News Portal') }}
+
+================================================================================
+© {{ current_year|default('2025') }} {{ sender_name|default('News Portal') }}. Todos los derechos reservados.
+Este es un correo automático, por favor no responder.
+================================================================================
